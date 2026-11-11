@@ -14,6 +14,7 @@ import { StudioError } from "@/lib/errors";
 import { isContentLanguage, isUiLanguage, type Language, type UiLanguage } from "@/lib/language";
 import { requireProfile, saveProfile, type Profile } from "@/lib/profile";
 import { brandFileText, proposeBrandKits, type BrandProposal } from "@/lib/brand-file";
+import { proposeInstructions, type InstructionsProposal } from "@/lib/instructions-file";
 import { VIEW_COOKIE } from "@/lib/view";
 import { cookies } from "next/headers";
 import { isPlatform } from "@/lib/platforms";
@@ -484,6 +485,32 @@ export async function saveInstructionsAction(_: ActionState, form: FormData) {
     );
     await team.saveInstructions(await getDb(), agent, { both: text(form, "both"), byLanguage });
   });
+}
+
+export type InstructionsFileState = { error?: string; proposal?: InstructionsProposal; fileName?: string } | null;
+
+/** Reads an uploaded file and proposes one agent's instructions from it. Nothing is saved. */
+export async function readInstructionsFileAction(_: InstructionsFileState, form: FormData): Promise<InstructionsFileState> {
+  try {
+    const agent = text(form, "agent");
+    if (!isAgentId(agent)) throw new StudioError("Unknown team member.");
+    const file = form.get("instructionsFile");
+    if (!(file instanceof File)) throw new StudioError("Choose a file first.");
+    const db = await getDb();
+    const profile = await requireProfile(db);
+    const [fileText, current] = await Promise.all([brandFileText(file), team.getInstructions(db, agent)]);
+    const { claudeJson } = await import("@/lib/ai/claude");
+    const { openRouterJson } = await import("@/lib/ai/openrouter");
+    const proposal = await proposeInstructions(process.env.ANTHROPIC_API_KEY ? claudeJson : openRouterJson, {
+      agent,
+      text: fileText,
+      ownerName: profile.name,
+      current: { both: current.both, byLanguage: current.byLanguage },
+    });
+    return { proposal, fileName: file.name };
+  } catch (error) {
+    return { error: messageFor(error) };
+  }
 }
 
 export async function saveSampleNoteAction(_: ActionState, form: FormData) {
