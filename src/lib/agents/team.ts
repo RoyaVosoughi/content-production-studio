@@ -4,7 +4,7 @@ import type { Db } from "../db/client";
 import { agentInstructions, agentLessons, agentRuns, agentSignals, teamSettings } from "../db/schema";
 import { StudioError } from "../errors";
 import type { Language } from "../language";
-import { AGENT_IDS, LEARNING_AGENTS, PASS_SCORE, type AgentId } from "./roster";
+import { AGENT_IDS, INSTRUCTIONS_LENGTH, LEARNING_AGENTS, PASS_SCORE, type AgentId } from "./roster";
 
 export { PASS_SCORE };
 /** The coach runs once this many new pieces of feedback have built up, so learning costs one AI request per batch. */
@@ -46,8 +46,7 @@ export async function lessonsFor(db: Db, language: Language): Promise<Partial<Re
 
 // ---- Your instructions ----
 
-/** Long enough for a full brief, short enough that every prompt stays cheap on the free models. */
-export const INSTRUCTIONS_LENGTH = 3000;
+export { INSTRUCTIONS_LENGTH };
 
 /** both is for every language; byLanguage holds each content language's own part, by language code. */
 export type Instructions = { both: string; byLanguage: Record<string, string> };
