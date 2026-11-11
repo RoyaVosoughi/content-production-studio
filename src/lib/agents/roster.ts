@@ -23,6 +23,12 @@ export type AgentId = (typeof AGENT_IDS)[number];
 /** A draft scoring this or more goes to the author as it is; below it, the writer gets one more try. */
 export const PASS_SCORE = 7;
 
+/**
+ * The longest each instructions box may be: long enough for a full brief, short enough that every
+ * prompt stays cheap on the free models. Kept here so the browser can use it without the database code.
+ */
+export const INSTRUCTIONS_LENGTH = 3000;
+
 /** Agents whose work is checked by the manager and taught by the coach. The coach teaches the manager too. */
 export const LEARNING_AGENTS: AgentId[] = AGENT_IDS.filter((id) => id !== "coach");
 

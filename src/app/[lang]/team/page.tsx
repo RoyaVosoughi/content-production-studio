@@ -3,7 +3,7 @@ import { learnNowAction, setManagerAction } from "@/app/actions";
 import { ActionForm, SubmitButton } from "@/components/action-form";
 import { BrandSetup } from "@/components/brand-setup";
 import { InstructionsForm } from "@/components/instructions-form";
-import { AgentNumbers, formatNumber, Stat, type AgentStats } from "@/components/team-parts";
+import { formatNumber, Stat, type AgentStats } from "@/components/team-parts";
 import { AGENTS, type AgentId } from "@/lib/agents/roster";
 import { GENERAL, getInstructions, LEARN_AFTER, teamOverview } from "@/lib/agents/team";
 import type { Strings } from "@/lib/i18n";
@@ -128,12 +128,6 @@ export default async function TeamPage({ params }: { params: Promise<{ lang: str
                       {t.learnNow}
                     </SubmitButton>
                   </ActionForm>
-                </div>
-              )}
-
-              {id !== "manager" && id !== "coach" && (
-                <div className="mt-4">
-                  <AgentNumbers agent={agent} language={lang} t={t} />
                 </div>
               )}
 
