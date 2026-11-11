@@ -1,6 +1,6 @@
-# Content Studio
+# Content Production Studio
 
-A personal-brand content studio that runs on your own computer. It finds timely ideas in this week's news, writes them in your voice, and turns each approved idea into a different post for every network: a Telegram note, a LinkedIn post, an Instagram carousel, a blog article, and scripts for videos you film yourself, which it then edits.
+A personal-brand content production studio that runs on your own computer. It finds timely ideas in this week's news, writes them in your voice, and turns each approved idea into a different post for every network: a Telegram note, a LinkedIn post, an Instagram carousel, a blog article, and scripts for videos you film yourself, which it then edits.
 
 Nothing is published without your click, and every approval is tied to the exact version you saw.
 

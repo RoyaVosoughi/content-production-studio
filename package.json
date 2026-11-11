@@ -2,7 +2,7 @@
   "name": "content-production-studio",
   "version": "0.1.0",
   "private": true,
-  "description": "A personal-brand content studio that runs on your own computer: ideas, posts, carousels and edited videos in your voice, in one or two languages.",
+  "description": "A personal-brand content production studio that runs on your own computer: ideas, posts, carousels and edited videos in your voice, in one or two languages.",
   "license": "MIT",
   "type": "module",
   "scripts": {
