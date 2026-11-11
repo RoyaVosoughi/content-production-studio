@@ -1,3 +1,5 @@
+**English** | [فارسی](README.fa.md)
+
 # Content Production Studio
 
 A personal-brand content production studio that runs on your own computer. It finds timely ideas in this week's news, writes them in your voice, and turns each approved idea into a different post for every network: a Telegram note, a LinkedIn post, an Instagram carousel, a blog article, and scripts for videos you film yourself, which it then edits.
@@ -23,8 +25,8 @@ Nothing is published without your click, and every approval is tied to the exact
 ## Quick start
 
 ```bash
-git clone <this repository>
-cd content-studio
+git clone https://github.com/RoyaVosoughi/content-production-studio.git
+cd content-production-studio
 npm install
 cp .env.example .env.local   # then add OPENROUTER_API_KEY and TAVILY_API_KEY
 npm run dev
