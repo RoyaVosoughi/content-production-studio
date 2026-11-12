@@ -5,6 +5,7 @@ import { claudeJson } from "./claude";
 import { openRouterJson } from "./openrouter";
 import { isVideoPlatform, PLATFORM_NAMES, VIDEO_FORMATS, type Platform, type VideoPlatform } from "../platforms";
 import type { SampleMeasures } from "../db/schema";
+import { loadEditPrompts, selectEditPrompts, type EditPrompt } from "../agents/editor/edit-prompts";
 import {
   ArticlePieceSchema,
   IdeaBatchSchema,
@@ -232,6 +233,17 @@ ${lines.join("\n")}
 </editing_samples>`;
 }
 
+/** The prompts from {OWNER}'s prompt file that fit this edit. */
+function editPromptsBlock(prompts: EditPrompt[]): string {
+  if (!prompts.length) return "";
+  return `
+
+{OWNER} keeps a file of editing prompts. These are the ones that fit this edit, chosen from the network and from what they asked for. Follow them as far as your plan can: cuts, pauses, title card, callouts, zooms, highlights and chapters. Each says how much of it the studio can do. For a prompt marked "Studio: no", don't imitate it with callouts or zooms. Instead, add one sentence to your reason saying it needs another tool, and name the prompt by its title so {OWNER} can copy it from their prompt file.
+<edit_prompts>
+${prompts.map((prompt) => `<prompt title="${prompt.title}" studio="${prompt.studio}">\n${prompt.body}\n</prompt>`).join("\n")}
+</edit_prompts>`;
+}
+
 export function createWriter(generate: GenerateJson): WritingModel {
   const run = <S extends z.ZodType>(agent: AgentId, context: WritingContext, prompt: string, schema: S) =>
     generate(buildSystemPrompt(context, agent), personalize(prompt, context), schema);
@@ -338,8 +350,10 @@ Adapt the scenario to how people read on this platform. Do not paste its section
       );
     },
 
-    planEdit(context, { platform, title, script, phrases, duration, samples }) {
+    planEdit(context, { platform, title, script, phrases, duration, samples, request }) {
       const limit = VIDEO_FORMATS[platform].maxSeconds;
+      const asked = [PLATFORM_NAMES[platform], request, context.instructions?.editor, ...(samples ?? []).map((sample) => sample.note)];
+      const prompts = selectEditPrompts(loadEditPrompts(), asked.filter(Boolean).join("\n"));
       return run(
         "editor",
         context,
@@ -359,7 +373,7 @@ Rules:
 <script>${JSON.stringify(script)}</script>
 <transcript>
 ${phrases.map((phrase) => `${phrase.number} [${phrase.start.toFixed(1)}–${phrase.end.toFixed(1)}] ${phrase.text}`).join("\n")}
-</transcript>${samplesBlock(samples)}`,
+</transcript>${request?.trim() ? `\n\n{OWNER} asked for this edit:\n<owner_request>${request.trim()}</owner_request>` : ""}${editPromptsBlock(prompts)}${samplesBlock(samples)}`,
         EditProposalSchema,
       );
     },

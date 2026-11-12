@@ -363,7 +363,8 @@ export async function retryFootageAction(_: ActionState, form: FormData) {
 export async function planEditAction(_: ActionState, form: FormData) {
   return perform(async () => {
     const mode = text(form, "mode") === "simple" ? "simple" : "ai";
-    await content.planVideoEdit(await studio.defaultDeps(), text(form, "pieceId"), versionFrom(form), mode);
+    const request = mode === "ai" ? String(form.get("request") ?? "") : "";
+    await content.planVideoEdit(await studio.defaultDeps(), text(form, "pieceId"), versionFrom(form), mode, request);
   });
 }
 

@@ -656,7 +656,13 @@ export async function retryFootage(db: Db, footageId: string, transcribe?: Trans
  * Plans the edit for this clip as a new version: by the AI, which reads the transcript and decides
  * how much editing the clip needs, or as a simple plan that keeps everything.
  */
-export async function planVideoEdit({ db, writer }: StudioDeps, pieceId: string, basedOn: number, mode: "ai" | "simple") {
+export async function planVideoEdit(
+  { db, writer }: StudioDeps,
+  pieceId: string,
+  basedOn: number,
+  mode: "ai" | "simple",
+  request = "",
+) {
   const piece = await requireVideoPiece(db, pieceId);
   if (piece.currentVersion !== basedOn) throw new StudioError(STALE_PIECE);
   const old = await pieceVersion(db, pieceId, basedOn);
@@ -672,6 +678,7 @@ export async function planVideoEdit({ db, writer }: StudioDeps, pieceId: string,
       phrases: clip.phrases.map((phrase, number) => ({ number, start: phrase.start, end: phrase.end, text: phrase.text })),
       duration: clip.duration,
       samples: await samplesForEdit(db, piece.platform),
+      request: request.trim().slice(0, 2000),
     });
     plan = { ...base, ...proposal, chapters: piece.platform === "youtube" ? proposal.chapters : [] };
   }

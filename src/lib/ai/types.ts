@@ -213,6 +213,8 @@ export interface WritingModel {
       duration: number;
       /** Videos the author likes the editing of, as measured by the studio, with their notes. */
       samples?: { platform: VideoPlatform | null; note: string; measures: SampleMeasures }[];
+      /** What the author asked this edit to do, in their own words. Picks prompts from their prompt file. */
+      request?: string;
     },
   ): Promise<EditProposal>;
   /** The manager checks a batch of ideas. */

@@ -429,24 +429,31 @@ function PlanSection({
   language: Language;
   t: Strings;
 }) {
+  const aiFormId = `plan-ai-${clipId}`;
   const planButtons = (
-    <div className="flex flex-wrap items-center gap-2">
-      <ActionForm action={planEditAction}>
-        {hidden}
-        <input type="hidden" name="mode" value="ai" />
-        <SubmitButton pendingLabel={t.planningAi} className={plan ? "btn-quiet" : "btn-primary"} disabled={dirty}>
-          {plan ? t.planAgain : t.planWithAi}
-        </SubmitButton>
-      </ActionForm>
-      {!plan && (
-        <ActionForm action={planEditAction}>
+    <div className="space-y-2">
+      <label className="block space-y-1">
+        <span className="text-sm font-medium">{t.planRequest}</span>
+        <textarea form={aiFormId} name="request" rows={2} maxLength={2000} placeholder={t.planRequestHint} dir="auto" className="field" />
+      </label>
+      <div className="flex flex-wrap items-center gap-2">
+        <ActionForm action={planEditAction} id={aiFormId}>
           {hidden}
-          <input type="hidden" name="mode" value="simple" />
-          <SubmitButton pendingLabel={t.planningSimple} disabled={dirty}>
-            {t.planSimple}
+          <input type="hidden" name="mode" value="ai" />
+          <SubmitButton pendingLabel={t.planningAi} className={plan ? "btn-quiet" : "btn-primary"} disabled={dirty}>
+            {plan ? t.planAgain : t.planWithAi}
           </SubmitButton>
         </ActionForm>
-      )}
+        {!plan && (
+          <ActionForm action={planEditAction}>
+            {hidden}
+            <input type="hidden" name="mode" value="simple" />
+            <SubmitButton pendingLabel={t.planningSimple} disabled={dirty}>
+              {t.planSimple}
+            </SubmitButton>
+          </ActionForm>
+        )}
+      </div>
     </div>
   );
 
