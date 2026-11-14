@@ -61,9 +61,13 @@ async function askModel(apiKey: string, model: string, system: string, prompt: s
 
 /** Tries each free model in turn, so one busy or silent model doesn't fail the whole step. */
 async function requestAnswer(apiKey: string, system: string, prompt: string): Promise<string> {
-  const configured = process.env.OPENROUTER_MODEL?.trim();
+  // One model, or several separated by commas to try in that order.
+  const configured = (process.env.OPENROUTER_MODEL ?? "")
+    .split(",")
+    .map((model) => model.trim())
+    .filter(Boolean);
   const misses: Miss[] = [];
-  for (const model of configured ? [configured] : FREE_MODELS) {
+  for (const model of configured.length > 0 ? configured : FREE_MODELS) {
     const result = await askModel(apiKey, model, system, prompt);
     if (typeof result === "string") return result;
     console.error(`OpenRouter: ${model} gave no answer (${result.reason}): ${result.detail}`);
