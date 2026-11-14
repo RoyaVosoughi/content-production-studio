@@ -1,11 +1,12 @@
 import Link from "next/link";
-import { saveResultsAction } from "@/app/actions";
+import { importLinkedInAction, saveResultsAction, syncInstagramAction } from "@/app/actions";
 import { ActionForm, SubmitButton } from "@/components/action-form";
 import { formatNumber } from "@/components/team-parts";
 import type { Strings } from "@/lib/i18n";
-import { languageName, textDirection, type UiLanguage as Language } from "@/lib/language";
+import { languageName, textDirection, uiLocale, type UiLanguage as Language } from "@/lib/language";
 import { readyPage } from "@/lib/view";
 import { platformLabel, PLATFORMS, RESULT_METRICS, type Metric, type Platform } from "@/lib/platforms";
+import { bestAndWorst, patternsOf, weeklySummary, type Group } from "@/lib/insights";
 import { MIN_TO_COMPARE, pillarSummary, resultsOverview, type RankedRow, type Standing } from "@/lib/results";
 
 export const dynamic = "force-dynamic";
@@ -39,6 +40,9 @@ export default async function ResultsPage({ params }: { params: Promise<{ lang: 
         <p className="mt-8 rounded-xl bg-paper p-5">{t.resultsNoPosts}</p>
       ) : (
         <>
+          <Insights rows={rows} lang={lang} t={t} />
+          <Sources rows={rows} t={t} lang={lang} />
+
           <section className="mt-10" aria-labelledby="waiting">
             <h2 id="waiting" className="font-display text-xl font-semibold">
               {t.resultsWaiting} <span className="label">({number(waiting.length)})</span>
@@ -223,6 +227,124 @@ function ScoreBar({ score }: { score: number }) {
     <div className="relative mt-1 h-2 rounded-full bg-mist" aria-hidden>
       <div className={`h-2 rounded-full ${score >= 1 ? "bg-cobalt" : "bg-amber"}`} style={{ width: `${width * 100}%` }} />
       <div className="absolute -top-1 h-4 w-0.5 bg-ink" style={{ insetInlineStart: `${100 / max}%` }} />
+    </div>
+  );
+}
+
+const MIN_COMPARED_FOR_PATTERNS = 5;
+
+function Insights({ rows, lang, t }: { rows: RankedRow[]; lang: Language; t: Strings }) {
+  const r = t.resultsSync;
+  const number = formatNumber(lang);
+  const week = weeklySummary(rows);
+  const compared = rows.filter((row) => row.score !== null);
+  const patterns = patternsOf(compared);
+  const topics = bestAndWorst(patterns.topics, 2);
+  const channels = bestAndWorst(patterns.channels, 2);
+  const days = bestAndWorst(patterns.weekdays, 2);
+  const weekday = (day: number) =>
+    new Intl.DateTimeFormat(lang === "fa" ? `${uiLocale(lang)}-u-ca-gregory` : uiLocale(lang), { weekday: "long" }).format(new Date(2024, 0, 7 + day));
+  const avg = (group: Group<unknown>) => r.avg.replace("{score}", number(group.score, 1)).replace("{posts}", number(group.posts));
+  const lines: { label: string; value: string; group: Group<unknown> }[] = [];
+  if (topics) {
+    lines.push({ label: r.bestTopic, value: topics.best.key, group: topics.best });
+    if (topics.worst) lines.push({ label: r.weakTopic, value: topics.worst.key, group: topics.worst });
+  }
+  if (channels?.worst) {
+    lines.push({ label: r.bestChannel, value: platformLabel(channels.best.key, lang), group: channels.best });
+    lines.push({ label: r.weakChannel, value: platformLabel(channels.worst.key, lang), group: channels.worst });
+  }
+  if (days?.worst) {
+    lines.push({ label: r.bestDay, value: weekday(days.best.key), group: days.best });
+    lines.push({ label: r.weakDay, value: weekday(days.worst.key), group: days.worst });
+  }
+  return (
+    <div className="mt-8 grid gap-4 lg:grid-cols-2">
+      <section className="rounded-xl bg-paper p-5" aria-labelledby="week" data-week>
+        <h2 id="week" className="font-display text-xl font-semibold">
+          {r.weekTitle}
+        </h2>
+        {week.posted === 0 ? (
+          <p className="mt-2 text-sm text-ink-soft">{r.weekNone}</p>
+        ) : (
+          <>
+            <p className="mt-2 text-sm">
+              {r.weekPosted.replace("{posted}", number(week.posted)).replace("{measured}", number(week.measured)).replace("{views}", number(week.views))}
+            </p>
+            <dl className="mt-3 space-y-2 text-sm">
+              {week.best && (
+                <div>
+                  <dt className="label">{r.weekBest}</dt>
+                  <dd dir={textDirection(week.best.language)}>{week.best.ideaTitle}</dd>
+                </div>
+              )}
+              {week.weakest && (
+                <div>
+                  <dt className="label">{r.weekWeakest}</dt>
+                  <dd dir={textDirection(week.weakest.language)}>{week.weakest.ideaTitle}</dd>
+                </div>
+              )}
+            </dl>
+          </>
+        )}
+      </section>
+      <section className="rounded-xl bg-paper p-5" aria-labelledby="patterns" data-patterns>
+        <h2 id="patterns" className="font-display text-xl font-semibold">
+          {r.patternsTitle}
+        </h2>
+        <p className="mt-1 text-sm text-ink-soft">{r.patternsHint}</p>
+        {compared.length < MIN_COMPARED_FOR_PATTERNS || lines.length === 0 ? (
+          <p className="mt-3 text-sm text-amber-deep">{r.patternsNeed}</p>
+        ) : (
+          <dl className="mt-3 space-y-2 text-sm">
+            {lines.map((line) => (
+              <div key={line.label}>
+                <dt className="label">{line.label}</dt>
+                <dd>
+                  <bdi>{line.value}</bdi> <span className="text-ink-soft">· {avg(line.group)}</span>
+                </dd>
+              </div>
+            ))}
+          </dl>
+        )}
+      </section>
+    </div>
+  );
+}
+
+/** Where numbers come from without typing: Instagram's own report, and LinkedIn's exported file. */
+function Sources({ rows, lang, t }: { rows: RankedRow[]; lang: Language; t: Strings }) {
+  const r = t.resultsSync;
+  const hasInstagram = rows.some((row) => row.platform === "instagram");
+  const hasLinkedIn = rows.some((row) => row.platform === "linkedin" || row.platform === "linkedin_video");
+  if (!hasInstagram && !hasLinkedIn) return null;
+  return (
+    <div className="mt-4 grid gap-4 lg:grid-cols-2">
+      {hasInstagram && (
+        <section className="rounded-xl border border-mist p-5" data-sync="instagram">
+          <h2 className="font-semibold">{r.instagramTitle}</h2>
+          <p className="mt-1 text-sm text-ink-soft">{r.instagramHint}</p>
+          {process.env.INSTAGRAM_ACCESS_TOKEN ? (
+            <ActionForm action={syncInstagramAction} className="mt-3">
+              <input type="hidden" name="ui" value={lang} />
+              <SubmitButton pendingLabel={r.instagramReading}>{r.instagramButton}</SubmitButton>
+            </ActionForm>
+          ) : (
+            <p className="mt-3 text-sm text-amber-deep">{r.instagramNoToken}</p>
+          )}
+        </section>
+      )}
+      {hasLinkedIn && (
+        <section className="rounded-xl border border-mist p-5" data-sync="linkedin">
+          <h2 className="font-semibold">{r.linkedinTitle}</h2>
+          <p className="mt-1 text-sm text-ink-soft">{r.linkedinHint}</p>
+          <ActionForm action={importLinkedInAction} resetOnSuccess className="mt-3 flex flex-wrap items-center gap-2">
+            <input type="hidden" name="ui" value={lang} />
+            <input type="file" name="file" required accept=".xlsx,.csv,text/csv" aria-label={r.linkedinFile} className="max-w-full text-sm" />
+            <SubmitButton pendingLabel={r.linkedinImporting}>{r.linkedinButton}</SubmitButton>
+          </ActionForm>
+        </section>
+      )}
     </div>
   );
 }

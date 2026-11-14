@@ -54,6 +54,11 @@ export function ActionForm({
     <PendingContext.Provider value={pending}>
       <form ref={formRef} id={id} onSubmit={handleSubmit} className={className} onInput={onInput}>
         {children}
+        {state?.notice && !pending && !state.error && (
+          <p role="status" className="mt-2 text-sm font-medium text-cobalt">
+            {state.notice}
+          </p>
+        )}
         {state?.error && !pending && (
           <p role="alert" className="mt-2 text-sm font-medium text-danger">
             {state.error}

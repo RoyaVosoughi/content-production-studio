@@ -152,7 +152,28 @@ export async function upcomingPosts(db: Db) {
 
 // ---- The clock ----
 
-const clock = globalThis as unknown as { __studioScheduler?: ReturnType<typeof setInterval>; __studioSchedulerBusy?: boolean };
+const clock = globalThis as unknown as {
+  __studioScheduler?: ReturnType<typeof setInterval>;
+  __studioSchedulerBusy?: boolean;
+  __studioInstagramSyncAt?: number;
+};
+
+/** Reads Instagram's numbers for live posts about once a day, when an Instagram token is set. */
+async function syncInstagramDaily(now = Date.now()) {
+  if (!process.env.INSTAGRAM_ACCESS_TOKEN) return;
+  if (clock.__studioInstagramSyncAt && now - clock.__studioInstagramSyncAt < 24 * 3600 * 1000) return;
+  clock.__studioInstagramSyncAt = now;
+  try {
+    const [{ getDb }, { fetchInstagramNumbers }, { syncInstagramResults }] = await Promise.all([
+      import("./db/client"),
+      import("./publishers/instagram"),
+      import("./results"),
+    ]);
+    await syncInstagramResults(await getDb(), fetchInstagramNumbers);
+  } catch (error) {
+    console.error("The studio couldn't read Instagram's numbers:", error);
+  }
+}
 
 /** Checks every 30 seconds for posts whose time has come. Started once when the studio starts. */
 export function startScheduler(intervalMs = 30_000) {
@@ -163,6 +184,7 @@ export function startScheduler(intervalMs = 30_000) {
     try {
       const { defaultPublishDeps } = await import("./content");
       await runDueSchedules(await defaultPublishDeps());
+      await syncInstagramDaily();
     } catch (error) {
       console.error("The scheduler couldn't check for posts:", error);
     } finally {

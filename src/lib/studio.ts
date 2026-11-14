@@ -29,7 +29,7 @@ import {
 import { StudioError } from "./errors";
 import { otherLanguage, type Language } from "./language";
 import { getProfile, requireProfile } from "./profile";
-import { performanceBrief } from "./results";
+import { performanceBrief, performancePatterns } from "./results";
 import { hasPlaceholder } from "./scenario";
 
 /** Five strong ideas a run: fewer AI words to write and check, and fewer to read through. */
@@ -189,6 +189,7 @@ export async function generateIdeas(
 
   // What went well once live, so the scout can build on it.
   const performance = await performanceBrief(db, language);
+  const patterns = await performancePatterns(db);
   const brief = {
     count: IDEA_BATCH_SIZE,
     focus: request,
@@ -197,6 +198,7 @@ export async function generateIdeas(
     pastTitles: past.map((idea) => idea.title),
     today: new Date().toISOString().slice(0, 10),
     performance: performance.map(({ number, title, pillar, results }) => ({ number, title, pillar, results })),
+    patterns,
   };
   const first = await writer.generateIdeas(context, brief);
   if (first.length === 0) throw new StudioError("No ideas came back. Please try again.");

@@ -12,7 +12,8 @@ import { getDb } from "@/lib/db/client";
 import type { EditPlan } from "@/lib/db/schema";
 import { savePhoto } from "@/lib/media";
 import { StudioError } from "@/lib/errors";
-import { isContentLanguage, isUiLanguage, type Language, type UiLanguage } from "@/lib/language";
+import { STRINGS } from "@/lib/i18n";
+import { isContentLanguage, isUiLanguage, uiLocale, type Language, type UiLanguage } from "@/lib/language";
 import { requireProfile, saveProfile, type Profile } from "@/lib/profile";
 import { brandFileText, proposeBrandKits, type BrandProposal } from "@/lib/brand-file";
 import { INTERVIEW_QUESTIONS, interviewDocument, interviewIsEnough } from "@/lib/brand-interview";
@@ -25,7 +26,7 @@ import * as results from "@/lib/results";
 import { startScoutJob } from "@/lib/scout-job";
 import * as studio from "@/lib/studio";
 
-export type ActionState = { error?: string } | null;
+export type ActionState = { error?: string; /** A short result to show, such as how many posts were updated. */ notice?: string } | null;
 
 const MAX_REQUEST_LENGTH = 2000;
 
@@ -72,16 +73,17 @@ function messageFor(error: unknown): string {
   return "That didn't work, and nothing was changed. Please try again.";
 }
 
-async function perform(work: () => Promise<void>): Promise<ActionState> {
+async function perform(work: () => Promise<void | string>): Promise<ActionState> {
+  let notice: string | void;
   try {
-    await work();
+    notice = await work();
   } catch (error) {
     return { error: messageFor(error) };
   }
   revalidatePath("/", "layout");
   // Once enough feedback has built up, the coach turns it into lessons after your wait is over.
   after(studio.learnInBackground);
-  return null;
+  return notice ? { notice } : null;
 }
 
 /** The numbers you read off one live post. */
@@ -89,6 +91,39 @@ export async function saveResultsAction(_: ActionState, form: FormData) {
   return perform(async () => {
     const raw = Object.fromEntries(results.METRICS.map((metric) => [metric, text(form, metric)]));
     await results.saveResults(await getDb(), text(form, "pieceId"), raw, text(form, "note"));
+  });
+}
+
+/** The interface language a form was sent from, for messages that name numbers. */
+const uiOf = (form: FormData) => (isUiLanguage(text(form, "ui")) ? (text(form, "ui") as UiLanguage) : "en");
+const countText = (template: string, ui: UiLanguage, values: Record<string, number>) =>
+  Object.entries(values).reduce((out, [key, value]) => out.replace(`{${key}}`, value.toLocaleString(uiLocale(ui))), template);
+
+/** Reads the numbers of live Instagram posts from Instagram. */
+export async function syncInstagramAction(_: ActionState, form: FormData) {
+  return perform(async () => {
+    if (!process.env.INSTAGRAM_ACCESS_TOKEN) throw new StudioError("Add INSTAGRAM_ACCESS_TOKEN to .env.local, then restart the app, to read numbers from Instagram.");
+    const { fetchInstagramNumbers } = await import("@/lib/publishers/instagram");
+    const report = await results.syncInstagramResults(await getDb(), fetchInstagramNumbers);
+    if (report.updated === 0 && report.failed > 0) throw new StudioError(report.firstError ?? "Instagram didn't answer.");
+    const ui = uiOf(form);
+    const r = STRINGS[ui].resultsSync;
+    return countText(report.failed ? r.doneSome : report.updated ? r.done : r.nothing, ui, { updated: report.updated, failed: report.failed });
+  });
+}
+
+/** Saves the numbers from a LinkedIn analytics export onto the posts it matches. */
+export async function importLinkedInAction(_: ActionState, form: FormData) {
+  return perform(async () => {
+    const file = form.get("file");
+    if (!(file instanceof File) || file.size === 0) throw new StudioError("Choose the file LinkedIn gave you first.");
+    const { importLinkedInExport, MAX_IMPORT_BYTES } = await import("@/lib/linkedin-import");
+    if (file.size > MAX_IMPORT_BYTES) throw new StudioError("That file is too big. LinkedIn's export is usually well under 5 MB.");
+    const report = await importLinkedInExport(await getDb(), file.name, Buffer.from(await file.arrayBuffer()));
+    const ui = uiOf(form);
+    const r = STRINGS[ui].resultsSync;
+    if (report.updated === 0) throw new StudioError(countText(r.importNone, ui, { unmatched: report.unmatched, noViews: report.noViews }));
+    return countText(r.imported, ui, { updated: report.updated, unmatched: report.unmatched, noViews: report.noViews });
   });
 }
 

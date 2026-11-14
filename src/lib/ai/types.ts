@@ -198,6 +198,8 @@ export interface WritingModel {
       today: string;
       /** How the author's past ideas did once they were live, strongest first. */
       performance?: { number: number; title: string; pillar: string; results: string }[];
+      /** What the numbers say overall: the best and weakest topic, channel and weekday. */
+      patterns?: string[];
       feedback?: Feedback;
     },
   ): Promise<IdeaDraft[]>;
