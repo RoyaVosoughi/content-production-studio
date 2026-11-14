@@ -5,6 +5,7 @@ import { Stepper } from "@/components/stepper";
 import { studioProgress } from "@/lib/progress";
 import { scoutProgressText } from "@/lib/i18n";
 import { currentScoutJob } from "@/lib/scout-job";
+import { getBrandKit } from "@/lib/studio";
 import { readyPage } from "@/lib/view";
 import { generateIdeasAction } from "../actions";
 
@@ -17,6 +18,7 @@ export default async function StudioPage({ params }: { params: Promise<{ lang: s
   const job = currentScoutJob();
   const steps = await studioProgress(db, lang, view);
   const brandReady = steps.find((step) => step.id === "brand")!.done;
+  const hasSources = (await getBrandKit(db, view)).sources.length > 0;
 
   const missingKeys = [
     ...(process.env.GEMINI_API_KEY || process.env.OPENROUTER_API_KEY ? [] : ["GEMINI_API_KEY"]),
@@ -66,7 +68,17 @@ export default async function StudioPage({ params }: { params: Promise<{ lang: s
           className="field mt-6 text-start"
           placeholder={t.askPlaceholder}
         />
-        <div className="mt-3 flex flex-wrap items-center justify-end gap-3">
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+          {hasSources ? (
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" name="onlyMine" className="size-4 accent-cobalt" />
+              {t.onlyMySources}
+            </label>
+          ) : (
+            <Link href={`/${lang}/brand#sources`} className="text-sm text-ink-soft underline underline-offset-2 hover:text-cobalt">
+              {t.addSources}
+            </Link>
+          )}
           <SubmitButton name="mode" value="topic" pendingLabel={t.generating} className="btn-primary">
             {t.askButton}
           </SubmitButton>

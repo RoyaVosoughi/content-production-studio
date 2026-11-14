@@ -74,6 +74,9 @@ export default async function BrandPage({
       <Field name="avoid" label={t.avoid} hint={t.avoidHint} defaultValue={kit.avoid} rows={3} dir={dir} />
       <Field name="samples" label={t.samples} hint={t.samplesHint} defaultValue={kit.samples} rows={10} dir={dir} />
       <Field name="searchTopics" label={t.searchTopics} hint={t.searchTopicsHint} defaultValue={kit.searchTopics.join("\n")} rows={5} dir={dir} />
+      <div id="sources" className="scroll-mt-24">
+        <Field name="sources" label={t.mySources} hint={t.sourcesHint} defaultValue={kit.sources.join("\n")} rows={5} dir="ltr" />
+      </div>
       <div className="flex flex-wrap items-center gap-3">
         <SubmitButton pendingLabel={t.saving} className="btn-primary">
           {t.saveKit}

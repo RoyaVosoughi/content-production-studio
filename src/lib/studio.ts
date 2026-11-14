@@ -1,3 +1,4 @@
+import { cleanSources, parseSources, pickFeedItems, readFeeds, type FetchText } from "./sources";
 import { cleanChannelPicks } from "./channels";
 import { allSkills } from "./agents/skills";
 import { and, desc, eq, ne, sql } from "drizzle-orm";
@@ -19,8 +20,10 @@ import {
   ideas,
   scenarios,
   scenarioVersions,
+  scoutRuns,
   type ChannelPick,
   type IdeaSource,
+  type ScoutLook,
   type ScenarioContent,
 } from "./db/schema";
 import { StudioError } from "./errors";
@@ -35,7 +38,13 @@ const MAX_SEARCH_QUERIES = 4;
 const PAST_TITLES_LIMIT = 100;
 const STALE_SCENARIO = "This scenario changed since you opened it. Reload and review the latest version.";
 
-export type StudioDeps = { db: Db; writer: WritingModel; searcher: SearchProvider };
+export type StudioDeps = {
+  db: Db;
+  writer: WritingModel;
+  searcher: SearchProvider;
+  /** Reads an RSS feed; the real web unless a test passes its own. */
+  fetchFeed?: FetchText;
+};
 
 export async function defaultDeps(): Promise<StudioDeps> {
   return { db: await getDb(), writer: studioWriter, searcher: tavilySearch };
@@ -50,11 +59,12 @@ export async function getBrandKit(db: Db, language: Language) {
   return kit;
 }
 
-export async function saveBrandKit(db: Db, language: Language, fields: BrandKitFields) {
+export async function saveBrandKit(db: Db, language: Language, fields: BrandKitFields & { sources?: string[] }) {
   await getBrandKit(db, language);
+  const { sources, ...kit } = fields;
   await db
     .update(brandKits)
-    .set({ ...fields, isDraft: false, updatedAt: new Date() })
+    .set({ ...kit, ...(sources ? { sources: cleanSources(sources) } : {}), isDraft: false, updatedAt: new Date() })
     .where(eq(brandKits.language, language));
 }
 
@@ -117,10 +127,11 @@ async function adaptIdeasOrFail(writer: WritingModel, context: WritingContext, s
  * it throws, so nothing is saved. Everything is saved at the very end, in one go.
  */
 export async function generateIdeas(
-  { db, writer, searcher }: StudioDeps,
+  { db, writer, searcher, fetchFeed }: StudioDeps,
   language: Language,
   focus: string,
   stopIfAsked: () => void = () => {},
+  { onlyMine = false }: { onlyMine?: boolean } = {},
 ) {
   const profile = await requireProfile(db);
   if (!profile.languages.includes(language)) throw new StudioError("Choose one of your content languages first.");
@@ -136,16 +147,38 @@ export async function generateIdeas(
   }
 
   const queries = [...(request ? [request] : []), ...context.brand.searchTopics].slice(0, MAX_SEARCH_QUERIES);
-  if (queries.length === 0 && shared.pages.length === 0) {
+  const { domains, feeds } = parseSources((await getBrandKit(db, language)).sources);
+  if (onlyMine && domains.length === 0 && feeds.length === 0) {
+    throw new StudioError("Add your sources to the Brand Kit first, or untick \"Only my sources\".");
+  }
+  if (queries.length === 0 && shared.pages.length === 0 && feeds.length === 0) {
     throw new StudioError("Add at least one search topic to the Brand Kit.");
   }
-  const found = queries.length ? await searcher.search(queries) : [];
+  // With only your sources, the web search is limited to your sites, and skipped when you have only feeds.
+  const searched = queries.length > 0 && (!onlyMine || domains.length > 0) ? queries : [];
+  const [found, read] = await Promise.all([
+    searched.length ? searcher.search(searched, onlyMine ? { domains } : undefined) : Promise.resolve([]),
+    feeds.length ? readFeeds(feeds, fetchFeed) : Promise.resolve({ items: [], report: [] }),
+  ]);
   stopIfAsked();
-  const sharedUrls = new Set(shared.pages.map((page) => page.url));
-  const results = [...shared.pages, ...found.filter((result) => !sharedUrls.has(result.url))];
+  const feedItems = pickFeedItems(read.items, [request, ...context.brand.searchTopics]);
+  const seen = new Set<string>();
+  const results = [...shared.pages, ...found, ...feedItems].filter((result) => !seen.has(result.url) && seen.add(result.url));
   if (results.length === 0) {
-    throw new StudioError("The search found nothing recent. Try asking for something else or change your search topics.");
+    throw new StudioError(
+      onlyMine
+        ? "Your sources had nothing recent on this. Untick \"Only my sources\" to search the whole web, or add more sources."
+        : "The search found nothing recent. Try asking for something else or change your search topics.",
+    );
   }
+  const looked: ScoutLook = {
+    onlyMine,
+    queries: searched,
+    domains: onlyMine ? domains : [],
+    feeds: read.report,
+    links: shared.pages.map((page) => page.url),
+    results: results.length,
+  };
 
   const past = await db
     .select({ title: ideas.title })
@@ -192,7 +225,9 @@ export async function generateIdeas(
     ];
   });
   const saved = await db.insert(ideas).values(rows).returning();
-  return saved.filter((idea) => idea.language === language);
+  const own = saved.filter((idea) => idea.language === language);
+  await db.insert(scoutRuns).values({ language, looked, ideas: own.length });
+  return own;
 }
 
 export async function reviseIdea({ db, writer }: StudioDeps, id: string, request: string) {

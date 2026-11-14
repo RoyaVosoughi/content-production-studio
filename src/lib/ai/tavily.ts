@@ -6,14 +6,16 @@ import type { SearchProvider, SearchResult } from "./types";
 const MAX_PAGE_LENGTH = 6000;
 
 export const tavilySearch: SearchProvider = {
-  async search(queries) {
+  async search(queries, options) {
     const apiKey = process.env.TAVILY_API_KEY;
     if (!apiKey) throw new StudioError("Add TAVILY_API_KEY to .env.local to search for ideas.");
     const client = tavily({ apiKey });
 
     const settled = await Promise.allSettled(
       queries.map((query) =>
-        client.search(query, { topic: "news", timeRange: "week", maxResults: 5, searchDepth: "basic" }),
+        options?.domains?.length
+          ? client.search(query, { topic: "general", timeRange: "month", maxResults: 5, searchDepth: "basic", includeDomains: options.domains })
+          : client.search(query, { topic: "news", timeRange: "week", maxResults: 5, searchDepth: "basic" }),
       ),
     );
 

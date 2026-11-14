@@ -237,7 +237,8 @@ export interface WritingModel {
 }
 
 export interface SearchProvider {
-  search(queries: string[]): Promise<SearchResult[]>;
+  /** With `domains`, searches only those sites, over a longer period, since a few sites publish less often. */
+  search(queries: string[], options?: { domains?: string[] }): Promise<SearchResult[]>;
   /** Reads pages the owner pasted. Links that can't be opened come back in `failed`. */
   read?(urls: string[]): Promise<{ pages: SearchResult[]; failed: string[] }>;
 }

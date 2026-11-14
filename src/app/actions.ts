@@ -103,7 +103,8 @@ export async function generateIdeasAction(_: ActionState, form: FormData): Promi
     const language = languageFrom(form);
     const job = startScoutJob(
       language,
-      async (stopIfAsked) => (await studio.generateIdeas(await studio.defaultDeps(), language, focus, stopIfAsked)).length,
+      async (stopIfAsked) =>
+        (await studio.generateIdeas(await studio.defaultDeps(), language, focus, stopIfAsked, { onlyMine: form.get("onlyMine") === "on" })).length,
       messageFor,
       () => void studio.learnInBackground(),
     );
@@ -420,6 +421,7 @@ export async function saveBrandKitAction(_: ActionState, form: FormData) {
       avoid: text(form, "avoid"),
       samples: text(form, "samples"),
       searchTopics: lines(form, "searchTopics"),
+      sources: lines(form, "sources"),
     });
   });
   // The form is rebuilt from the saved kit, so the "saved" note and the next step travel in the address.

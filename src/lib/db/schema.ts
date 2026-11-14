@@ -9,8 +9,28 @@ export const brandKits = pgTable("brand_kits", {
   avoid: text("avoid").notNull(),
   samples: text("samples").notNull(),
   searchTopics: jsonb("search_topics").$type<string[]>().notNull(),
+  /** Sites, domains and RSS feeds the Idea Scout reads, one per line as you typed them. */
+  sources: jsonb("sources").$type<string[]>().notNull().default([]),
   isDraft: boolean("is_draft").notNull().default(true),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/** Where one idea search looked, so you can see it under the results. */
+export type ScoutLook = {
+  onlyMine: boolean;
+  queries: string[];
+  domains: string[];
+  feeds: { url: string; items: number; error?: string }[];
+  links: string[];
+  results: number;
+};
+
+export const scoutRuns = pgTable("scout_runs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  language: text("language").notNull(),
+  looked: jsonb("looked").$type<ScoutLook>().notNull(),
+  ideas: integer("ideas").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
 export type IdeaSource = { url: string; title: string; publishedDate: string | null };
@@ -383,6 +403,14 @@ CREATE TABLE IF NOT EXISTS brand_kits (
   search_topics jsonb NOT NULL,
   is_draft boolean NOT NULL DEFAULT true,
   updated_at timestamptz NOT NULL DEFAULT now()
+);
+ALTER TABLE brand_kits ADD COLUMN IF NOT EXISTS sources jsonb NOT NULL DEFAULT '[]'::jsonb;
+CREATE TABLE IF NOT EXISTS scout_runs (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  language text NOT NULL,
+  looked jsonb NOT NULL,
+  ideas integer NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE TABLE IF NOT EXISTS ideas (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

@@ -9,11 +9,12 @@ import { currentScoutJob } from "@/lib/scout-job";
 import { AGENTS } from "@/lib/agents/roster";
 import { latestVerdicts } from "@/lib/agents/team";
 import type { Db } from "@/lib/db/client";
-import { ideas } from "@/lib/db/schema";
+import { ideas, scoutRuns } from "@/lib/db/schema";
 import type { Strings } from "@/lib/i18n";
 import { languageName, textDirection, type Language, type UiLanguage } from "@/lib/language";
 import { loadMap, WRITERS, type MapData, type MapNodeId, type MapPiece, type MapScenario } from "@/lib/map";
 import { platformLabel } from "@/lib/platforms";
+import { ScoutLookNote } from "@/components/scout-look";
 import { closestPublished, ideaTopic, publishedIdeas } from "@/lib/duplicate";
 import { upcomingPosts } from "@/lib/schedule";
 import { scheduleLabel } from "@/lib/schedule-time";
@@ -166,11 +167,13 @@ async function ScoutWork({ db, ui, view, t }: { db: Db; ui: UiLanguage; view: La
   const rejected = rows.filter((idea) => idea.status === "rejected");
   const verdicts = await latestVerdicts(db, proposed.map((idea) => idea.pairId));
   const published = proposed.length ? await publishedIdeas(db, view) : [];
+  const [lastRun] = await db.select().from(scoutRuns).where(eq(scoutRuns.language, view)).orderBy(desc(scoutRuns.createdAt)).limit(1);
   return (
     <>
       <h3 className="font-display text-xl font-semibold">
         {t.waiting} <span className="label">({proposed.length})</span>
       </h3>
+      {lastRun && <ScoutLookNote looked={lastRun.looked} at={lastRun.createdAt} ui={ui} t={t} />}
       {proposed.length === 0 ? (
         <p className="mt-3 text-ink-soft">{t.noIdeas}</p>
       ) : (
