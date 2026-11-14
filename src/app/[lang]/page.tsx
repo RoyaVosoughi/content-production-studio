@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { ActionForm, SubmitButton } from "@/components/action-form";
 import { ScoutProgress } from "@/components/scout-progress";
+import { WaitingWork } from "@/components/waiting-work";
 import { Stepper } from "@/components/stepper";
 import { studioProgress } from "@/lib/progress";
 import { scoutProgressText } from "@/lib/i18n";
@@ -14,7 +15,7 @@ export const dynamic = "force-dynamic";
 /** The studio's first page: one question. The map of the team opens on its own page once you ask. */
 export default async function StudioPage({ params }: { params: Promise<{ lang: string }> }) {
   const { lang: param } = await params;
-  const { ui: lang, t, view, db, profile } = await readyPage(param);
+  const { ui: lang, t, view, db, profile, languages } = await readyPage(param);
   const job = currentScoutJob();
   const steps = await studioProgress(db, lang, view);
   const brandReady = steps.find((step) => step.id === "brand")!.done;
@@ -95,6 +96,8 @@ export default async function StudioPage({ params }: { params: Promise<{ lang: s
           </Link>
         </p>
       </ActionForm>
+
+      <WaitingWork db={db} languages={languages} view={view} ui={lang} t={t} />
 
       {missingKeys.length > 0 && (
         <div role="status" className="mt-6 rounded-lg border-s-4 border-amber bg-paper p-4 text-sm">
