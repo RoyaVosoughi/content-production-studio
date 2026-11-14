@@ -27,7 +27,34 @@ async function connect(): Promise<Db> {
   }
   const dir = resolve(/*turbopackIgnore: true*/ process.env.PGLITE_DIR ?? ".data/pglite");
   mkdirSync(dir, { recursive: true });
-  return createLocalDb(dir);
+  const db = await createLocalDb(dir);
+  closeOnExit(db);
+  return db;
+}
+
+/**
+ * The local database keeps part of its work in memory. Stopping the studio without closing it can
+ * leave the files half written, and then it won't open again. So close it before the process ends.
+ */
+function closeOnExit(db: Db) {
+  const flags = globalThis as unknown as { __studioDbCloseHooked?: boolean };
+  if (flags.__studioDbCloseHooked) return;
+  flags.__studioDbCloseHooked = true;
+  const client = (db as unknown as { $client: { close?: () => Promise<void> } }).$client;
+  let closing = false;
+  const close = (signal: NodeJS.Signals) => {
+    if (closing) return;
+    closing = true;
+    // Never hang on the way out: give the database a few seconds, then exit anyway.
+    const timer = setTimeout(() => process.exit(signal === "SIGINT" ? 130 : 143), 5000);
+    Promise.resolve(client.close?.())
+      .catch((error) => console.error("Couldn't close the local database cleanly:", error))
+      .finally(() => {
+        clearTimeout(timer);
+        process.exit(signal === "SIGINT" ? 130 : 143);
+      });
+  };
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.once(signal, () => close(signal));
 }
 
 /** Embedded Postgres for local development and tests. Omit `dir` to keep it in memory. */
