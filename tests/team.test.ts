@@ -15,6 +15,7 @@ import {
   generateIdeas,
   getScenario,
   getSibling,
+  requireIdea,
   saveScenarioEdit,
   writeScenario,
   writingContext,
@@ -67,53 +68,67 @@ async function approvedIdea() {
   return first;
 }
 
+async function scenarioReady() {
+  const { id } = await approvedIdea();
+  await writeScenario(deps, id);
+  await approveScenario(db, id, 1);
+  return id;
+}
+
 describe("the manager", () => {
-  it("sends a weak scenario back once, with its reasons, and keeps the rewrite", async () => {
-    writer.reviewScenario.mockResolvedValueOnce(review(4, ["The hook is generic"]));
-    writer.writeScenario.mockResolvedValueOnce(scenario("First")).mockResolvedValueOnce(scenario("Second"));
+  it("leaves ideas and scenarios to you, so they cost no review", async () => {
     const { id } = await approvedIdea();
     await writeScenario(deps, id);
+    expect(writer.generateIdeas).toHaveBeenCalledTimes(1);
+    expect(writer.writeScenario).toHaveBeenCalledTimes(1);
+    expect(writer.reviewPiece).not.toHaveBeenCalled();
+    expect(await db.select().from(agentRuns)).toHaveLength(0);
+  });
 
-    expect(writer.writeScenario).toHaveBeenCalledTimes(2);
-    expect(writer.reviewScenario).toHaveBeenCalledTimes(1);
-    const feedback = writer.writeScenario.mock.calls[1][1].feedback;
+  it("sends a weak post back once, with its reasons, and keeps the rewrite", async () => {
+    writer.reviewPiece.mockResolvedValueOnce(review(4, ["The hook is generic"]));
+    writer.writePiece.mockResolvedValueOnce({ body: "First" }).mockResolvedValueOnce({ body: "Second" });
+    const id = await scenarioReady();
+    await createPieces(deps, id, ["telegram"], ["en"]);
+
+    expect(writer.writePiece).toHaveBeenCalledTimes(2);
+    expect(writer.reviewPiece).toHaveBeenCalledTimes(1);
+    const feedback = writer.writePiece.mock.calls[1][1].feedback;
     expect(feedback.problems).toEqual(["The hook is generic"]);
-    expect(feedback.previous).toEqual(scenario("First"));
-    expect((await getScenario(db, id))!.current.content.title).toBe("Second");
+    const [piece] = await getPieces(db, id);
+    expect(piece.current.content.body).toBe("Second");
 
-    const [run] = await db.select().from(agentRuns).where(eq(agentRuns.subject, id));
-    expect(run).toMatchObject({ agent: "storyteller", score: 4, revised: true, version: 1 });
+    const [run] = await db.select().from(agentRuns).where(eq(agentRuns.subject, piece.id));
+    expect(run).toMatchObject({ agent: "telegram", score: 4, revised: true, version: 1 });
     const signals = await db.select().from(agentSignals).where(eq(agentSignals.kind, "manager"));
-    expect(signals.map((signal) => signal.agent)).toEqual(["storyteller"]);
+    expect(signals.map((signal) => signal.agent)).toEqual(["telegram"]);
   });
 
   it("passes good work straight through", async () => {
-    const { id } = await approvedIdea();
-    await writeScenario(deps, id);
-    expect(writer.writeScenario).toHaveBeenCalledTimes(1);
-    const [run] = await db.select().from(agentRuns).where(eq(agentRuns.subject, id));
+    const id = await scenarioReady();
+    await createPieces(deps, id, ["telegram"], ["en"]);
+    expect(writer.writePiece).toHaveBeenCalledTimes(1);
+    const [piece] = await getPieces(db, id);
+    const [run] = await db.select().from(agentRuns).where(eq(agentRuns.subject, piece.id));
     expect(run).toMatchObject({ score: 9, revised: false });
   });
 
   it("never blocks the work when the manager or the rewrite fails", async () => {
-    writer.reviewScenario.mockRejectedValueOnce(new Error("rate limit"));
-    const { id } = await approvedIdea();
-    await writeScenario(deps, id);
-    expect((await getScenario(db, id))!.current.content.title).toBe("First");
+    writer.reviewPiece.mockRejectedValueOnce(new Error("rate limit"));
+    const id = await scenarioReady();
+    await createPieces(deps, id, ["telegram"], ["en"]);
+    expect((await getPieces(db, id))[0].current.content.body).toBe("A Telegram note");
 
     writer.reviewPiece.mockResolvedValueOnce(review(3));
     writer.writePiece.mockResolvedValueOnce({ body: "Draft" }).mockRejectedValueOnce(new Error("down"));
-    await approveScenario(db, id, 1);
-    await createPieces(deps, id, ["telegram"], ["en"]);
-    const [piece] = await getPieces(db, id);
-    expect(piece.current.content.body).toBe("Draft");
+    await createPieces(deps, id, ["linkedin"], ["en"]);
+    const linkedin = (await getPieces(db, id)).find((piece) => piece.platform === "linkedin")!;
+    expect(linkedin.current.content.body).toBe("Draft");
   });
 
   it("catches a broken platform rule itself, without spending a review", async () => {
     writer.writePiece.mockResolvedValueOnce({ body: "x".repeat(5000) }).mockResolvedValueOnce({ body: "Short enough" });
-    const { id } = await approvedIdea();
-    await writeScenario(deps, id);
-    await approveScenario(db, id, 1);
+    const id = await scenarioReady();
     await createPieces(deps, id, ["telegram"], ["en"]);
 
     expect(writer.reviewPiece).not.toHaveBeenCalled();
@@ -126,49 +141,69 @@ describe("the manager", () => {
 
   it("flags links that didn't come from the search", async () => {
     writer.writePiece.mockResolvedValueOnce({ body: "See https://made-up.example/x" }).mockResolvedValueOnce({ body: "Clean" });
-    const { id } = await approvedIdea();
-    await writeScenario(deps, id);
-    await approveScenario(db, id, 1);
+    const id = await scenarioReady();
     await createPieces(deps, id, ["telegram"], ["en"]);
     expect(writer.writePiece.mock.calls[1][1].feedback.problems[0]).toContain("made-up.example");
   });
 
-  it("replaces only the weak ideas and keeps the strong ones", async () => {
-    writer.reviewIdeas.mockResolvedValueOnce({
-      ideas: [
-        { number: 1, score: 9, problem: "", noteEn: "Strong", noteFa: "قوی" },
-        { number: 2, score: 3, problem: "Too generic", noteEn: "Weak", noteFa: "ضعیف" },
-      ],
-      instructions: "Replace idea 2",
-    });
-    writer.generateIdeas
-      .mockResolvedValueOnce([idea("Keep me"), idea("Weak one")])
-      .mockResolvedValueOnce([idea("Changed by mistake"), idea("Better one")]);
-    const saved = await generateIdeas(deps, "en", "");
-
-    expect(saved.map((row) => row.title)).toEqual(["Keep me", "Better one"]);
-    expect(writer.generateIdeas.mock.calls[1][1].feedback.problems).toEqual(["Idea 2: Too generic"]);
-    const runs = await db.select().from(agentRuns);
-    const bySubject = new Map(runs.map((run) => [run.subject, run]));
-    expect(bySubject.get(saved[0].pairId)).toMatchObject({ score: 9, revised: false });
-    expect(bySubject.get(saved[1].pairId)).toMatchObject({ score: 3, revised: true });
-  });
-
-  it("costs nothing extra when paused", async () => {
+  it("costs nothing extra when paused, but the free rule checks still run", async () => {
     await setManagerEnabled(db, false);
-    const { id } = await approvedIdea();
-    await writeScenario(deps, id);
-    expect(writer.reviewIdeas).not.toHaveBeenCalled();
-    expect(writer.reviewScenario).not.toHaveBeenCalled();
+    const id = await scenarioReady();
+    await createPieces(deps, id, ["telegram"], ["en"]);
+    expect(writer.reviewPiece).not.toHaveBeenCalled();
     expect(await db.select().from(agentRuns)).toHaveLength(0);
     expect((await getTeamSettings(db)).managerEnabled).toBe(false);
-  });
 
-  it("doesn't check the second language, which is adapted from checked work", async () => {
+    writer.writePiece.mockResolvedValueOnce({ body: "x".repeat(5000) }).mockResolvedValueOnce({ body: "Fixed" });
+    await createPieces(deps, id, ["linkedin"], ["en"]);
+    expect(writer.reviewPiece).not.toHaveBeenCalled();
+    const linkedin = (await getPieces(db, id)).find((piece) => piece.platform === "linkedin")!;
+    expect(linkedin.current.content.body).toBe("Fixed");
+  });
+});
+
+describe("channel advice", () => {
+  const advice = [
+    { platform: "linkedin", score: 5, recommended: true, angle: "The cost angle", brief: "Lead with the money saved." },
+    { platform: "telegram", score: 4, recommended: true, angle: "Insider take", brief: "One sharp observation." },
+    { platform: "linkedin", score: 1, recommended: false, angle: "Duplicate", brief: "Ignored" },
+    { platform: "myspace", score: 5, recommended: true, angle: "Not a channel", brief: "Ignored" },
+    { platform: "website", score: 9, recommended: false, angle: "Deep dive", brief: "Explain it fully." },
+  ];
+
+  it("saves the scenario writer's channel picks with the scenario, cleaned, for both languages", async () => {
+    writer.writeScenario.mockResolvedValueOnce({ ...scenario("First"), channels: advice });
     const { id } = await approvedIdea();
     await writeScenario(deps, id);
-    expect(writer.reviewScenario).toHaveBeenCalledTimes(1);
-    expect(writer.adaptScenario).toHaveBeenCalledTimes(1);
+    const own = (await getScenario(db, id))!;
+    expect(own.current.content).toEqual(scenario("First"));
+    expect(own.channels!.map((pick) => [pick.platform, pick.score, pick.recommended])).toEqual([
+      ["linkedin", 5, true],
+      ["telegram", 4, true],
+      ["website", 5, false],
+    ]);
+    const sibling = (await getSibling(db, await requireIdea(db, id)))!;
+    expect((await getScenario(db, sibling.id))!.channels).toEqual(own.channels);
+  });
+
+  it("gives each channel's writer its brief", async () => {
+    writer.writeScenario.mockResolvedValueOnce({ ...scenario("First"), channels: advice });
+    const id = await scenarioReady();
+    await createPieces(deps, id, ["linkedin", "telegram"], ["en"]);
+    const briefs = writer.writePiece.mock.calls.map((call) => [call[1].platform, call[1].channel?.brief]);
+    expect(briefs).toEqual(
+      expect.arrayContaining([
+        ["linkedin", "Lead with the money saved."],
+        ["telegram", "One sharp observation."],
+      ]),
+    );
+  });
+
+  it("still works for scenarios written before channel advice", async () => {
+    const id = await scenarioReady();
+    expect((await getScenario(db, id))!.channels).toBeNull();
+    await createPieces(deps, id, ["telegram"], ["en"]);
+    expect(writer.writePiece.mock.calls[0][1].channel).toBeUndefined();
   });
 });
 
@@ -196,14 +231,6 @@ describe("learning", () => {
     await writeScenario(deps, id);
     await saveScenarioEdit(db, id, 1, scenario("First"));
     expect(await db.select().from(agentSignals).where(eq(agentSignals.kind, "edit"))).toHaveLength(0);
-  });
-
-  it("tells the manager when Sam rejects an idea it scored highly", async () => {
-    const [first] = await generateIdeas(deps, "en", "");
-    await decideIdea(db, first.id, "rejected");
-    const [missed] = await db.select().from(agentSignals).where(eq(agentSignals.agent, "manager"));
-    expect(missed.kind).toBe("missed");
-    expect(missed.detail).toContain("9/10");
   });
 
   it("waits for enough feedback, then rewrites only the coach's lessons for agents with feedback", async () => {
@@ -270,13 +297,13 @@ describe("learning", () => {
   });
 
   it("shows each member's record on the Team page", async () => {
-    writer.reviewScenario.mockResolvedValueOnce(review(5, ["Weak example"]));
-    const { id } = await approvedIdea();
-    await writeScenario(deps, id);
+    writer.reviewPiece.mockResolvedValueOnce(review(5, ["Weak example"]));
+    const id = await scenarioReady();
+    await createPieces(deps, id, ["telegram"], ["en"]);
     const overview = await teamOverview(db);
-    const storyteller = overview.agents.find((agent) => agent.id === "storyteller")!;
-    expect(storyteller).toMatchObject({ checked: 1, averageScore: 5, sentBack: 1 });
-    expect(storyteller.recent[0].problems).toEqual(["Weak example"]);
+    const telegram = overview.agents.find((agent) => agent.id === "telegram")!;
+    expect(telegram).toMatchObject({ checked: 1, averageScore: 5, sentBack: 1 });
+    expect(telegram.recent[0].problems).toEqual(["Weak example"]);
     expect(overview.agents.find((agent) => agent.id === "scout")!.approvals).toBe(1);
   });
 });

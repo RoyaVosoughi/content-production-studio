@@ -38,7 +38,12 @@ export const scenarios = pgTable("scenarios", {
     .references(() => ideas.id, { onDelete: "cascade" }),
   currentVersion: integer("current_version").notNull(),
   approvedVersion: integer("approved_version"),
+  /** The scenario writer's advice on which channels fit this idea, with a brief for each. Null for older scenarios. */
+  channels: jsonb("channels").$type<ChannelPick[]>(),
 });
+
+/** How well one channel fits an idea, 1 to 5, the angle to take there, and a short brief for its writer. */
+export type ChannelPick = { platform: string; score: number; recommended: boolean; angle: string; brief: string };
 
 export type ScenarioContent = {
   title: string;
@@ -394,6 +399,7 @@ CREATE TABLE IF NOT EXISTS scenarios (
   current_version integer NOT NULL,
   approved_version integer
 );
+ALTER TABLE scenarios ADD COLUMN IF NOT EXISTS channels jsonb;
 CREATE TABLE IF NOT EXISTS scenario_versions (
   idea_id uuid NOT NULL REFERENCES ideas(id) ON DELETE CASCADE,
   version integer NOT NULL,

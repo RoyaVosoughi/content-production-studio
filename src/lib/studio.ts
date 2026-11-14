@@ -1,20 +1,16 @@
+import { cleanChannelPicks } from "./channels";
 import { allSkills } from "./agents/skills";
 import { and, desc, eq, ne, sql } from "drizzle-orm";
 import {
   describeEdit,
-  getTeamSettings,
   learnFromFeedback,
   instructionsFor,
   lessonsFor,
-  managerCheck,
-  PASS_SCORE,
   recordOwnerFeedback,
   recordSignal,
-  saveVerdict,
-  type Verdict,
 } from "./agents/team";
 import { tavilySearch } from "./ai/tavily";
-import type { IdeaDraft, IdeaText, SearchProvider, WritingContext, WritingModel } from "./ai/types";
+import type { IdeaText, SearchProvider, WritingContext, WritingModel } from "./ai/types";
 import { studioWriter } from "./ai/writer";
 import { emptyBrandKit, type BrandKitFields } from "./brand-seed";
 import { getDb, type Db } from "./db/client";
@@ -23,6 +19,7 @@ import {
   ideas,
   scenarios,
   scenarioVersions,
+  type ChannelPick,
   type IdeaSource,
   type ScenarioContent,
 } from "./db/schema";
@@ -171,8 +168,8 @@ export async function generateIdeas(
   const first = await writer.generateIdeas(context, brief);
   if (first.length === 0) throw new StudioError("No ideas came back. Please try again.");
   stopIfAsked();
-  const { drafts, verdicts } = await checkIdeas({ db, writer }, context, brief, first.slice(0, IDEA_BATCH_SIZE));
-  stopIfAsked();
+  // You check the ideas yourself, so the manager spends no requests on them.
+  const drafts = first.slice(0, IDEA_BATCH_SIZE);
 
   // A source is kept only if the search really returned it, so a made-up link can't appear as evidence.
   const known = new Map(results.map((result) => [result.url, result]));
@@ -195,76 +192,7 @@ export async function generateIdeas(
     ];
   });
   const saved = await db.insert(ideas).values(rows).returning();
-  const own = saved.filter((idea) => idea.language === language);
-  for (const [index, idea] of own.entries()) {
-    await saveVerdict(db, { agent: "scout", task: "idea", language, subject: idea.pairId }, verdicts[index] ?? null);
-  }
-  return own;
-}
-
-/**
- * The manager scores the scout's batch. If some ideas are weak, the scout replaces just those once,
- * keeping the rest. A failed check or rewrite keeps the first batch, so it never costs you your ideas.
- */
-async function checkIdeas(
-  { db, writer }: Pick<StudioDeps, "db" | "writer">,
-  context: WritingContext,
-  brief: Parameters<WritingModel["generateIdeas"]>[1],
-  drafts: IdeaDraft[],
-): Promise<{ drafts: IdeaDraft[]; verdicts: (Verdict | null)[] }> {
-  const { managerEnabled } = await getTeamSettings(db);
-  if (!managerEnabled) return { drafts, verdicts: [] };
-  let review;
-  try {
-    review = await writer.reviewIdeas(context, { ideas: drafts, results: brief.results, pastTitles: brief.pastTitles });
-  } catch (error) {
-    console.error("The manager couldn't check the ideas:", error);
-    return { drafts, verdicts: [] };
-  }
-  const items = drafts.map((_, index) => review.ideas.find((item) => item.number === index + 1));
-  const verdicts: Verdict[] = items.map((item) => {
-    if (!item) return { score: null, revised: false, problems: [], note: { en: "", fa: "" } };
-    const score = Math.min(10, Math.max(1, Math.round(item.score)));
-    return { score, revised: false, problems: item.problem ? [item.problem] : [], note: { en: item.noteEn, fa: item.noteFa } };
-  });
-  const weak = verdicts.flatMap((verdict, index) => (verdict.score != null && verdict.score < PASS_SCORE ? [index] : []));
-  if (weak.length === 0) return { drafts, verdicts };
-
-  const problems = weak.map((index) => `Idea ${index + 1}: ${verdicts[index].problems[0] || "too weak to show {OWNER}"}`);
-  await recordSignal(db, {
-    agent: "scout",
-    language: context.language,
-    kind: "manager",
-    detail: `The manager sent back ${weak.length} of ${drafts.length} ideas. ${problems.join(" | ")}`,
-  });
-  try {
-    const second = await writer.generateIdeas(context, {
-      ...brief,
-      count: drafts.length,
-      feedback: { previous: drafts, problems, instructions: review.instructions },
-    });
-    // The rewrite must keep the batch's shape, or the manager's notes would land on the wrong ideas.
-    if (second.length !== drafts.length) return { drafts, verdicts };
-    const replaced = second.map((idea, index) => (weak.includes(index) ? idea : drafts[index]));
-    return {
-      drafts: replaced,
-      verdicts: verdicts.map((verdict, index) =>
-        weak.includes(index)
-          ? {
-              ...verdict,
-              revised: true,
-              note: {
-                en: "The manager sent the first version back, so this is the scout's replacement.",
-                fa: "مدیر نسخه‌ی اول را برگرداند، برای همین این ایده‌ی جایگزین است.",
-              },
-            }
-          : verdict,
-      ),
-    };
-  } catch (error) {
-    console.error("The scout couldn't replace the weak ideas:", error);
-    return { drafts, verdicts };
-  }
+  return saved.filter((idea) => idea.language === language);
 }
 
 export async function reviseIdea({ db, writer }: StudioDeps, id: string, request: string) {
@@ -322,11 +250,11 @@ export async function decideIdea(db: Db, id: string, status: "approved" | "rejec
   });
 }
 
-async function saveFirstVersion(db: Db, ideaId: string, content: ScenarioContent) {
+async function saveFirstVersion(db: Db, ideaId: string, content: ScenarioContent, channels: ChannelPick[] | null) {
   await db.transaction(async (tx) => {
     const created = await tx
       .insert(scenarios)
-      .values({ ideaId, currentVersion: 1 })
+      .values({ ideaId, currentVersion: 1, channels })
       .onConflictDoNothing()
       .returning({ ideaId: scenarios.ideaId });
     if (created.length > 0) {
@@ -347,32 +275,29 @@ export async function writeScenario({ db, writer }: StudioDeps, ideaId: string) 
   let own = await getScenario(db, ideaId);
   const siblingScenario = sibling && (await getScenario(db, sibling.id));
   if (!own) {
-    const language = idea.language as Language;
-    const context = await writingContext(db, language);
-    let content: ScenarioContent;
-    let verdict: Verdict | null = null;
+    const context = await writingContext(db, idea.language as Language);
     if (siblingScenario) {
-      content = await writer.adaptScenario(context, { scenario: siblingScenario.current.content });
+      const content = await writer.adaptScenario(context, { scenario: siblingScenario.current.content });
+      await saveFirstVersion(db, ideaId, content, siblingScenario.channels);
     } else {
-      const brief = { idea: ideaText(idea), sources: idea.sources.map(({ title, url }) => ({ title, url })) };
-      const { managerEnabled } = await getTeamSettings(db);
-      ({ draft: content, verdict } = await managerCheck(db, {
-        enabled: managerEnabled,
-        agent: "storyteller",
-        language,
-        draft: await writer.writeScenario(context, brief),
-        review: (scenario) => writer.reviewScenario(context, { ...brief, scenario }),
-        rewrite: (feedback) => writer.writeScenario(context, { ...brief, feedback }),
-      }));
+      // You review the scenario yourself, so it goes straight to you. The channel advice comes in the same request.
+      const { channels, ...content } = await writer.writeScenario(context, {
+        idea: ideaText(idea),
+        sources: idea.sources.map(({ title, url }) => ({ title, url })),
+      });
+      await saveFirstVersion(db, ideaId, pickScenario(content), cleanChannelPicks(channels));
     }
-    await saveFirstVersion(db, ideaId, content);
-    await saveVerdict(db, { agent: "storyteller", task: "scenario", language, subject: ideaId, version: 1 }, verdict);
     own = await getScenario(db, ideaId);
   }
   if (sibling && !siblingScenario && own) {
     const context = await writingContext(db, sibling.language as Language);
-    await saveFirstVersion(db, sibling.id, await writer.adaptScenario(context, { scenario: own.current.content }));
+    await saveFirstVersion(db, sibling.id, await writer.adaptScenario(context, { scenario: own.current.content }), own.channels);
   }
+}
+
+/** Only the scenario's own fields are saved as its content. */
+function pickScenario({ title, hook, mainPoints, angle, example, callToAction }: ScenarioContent): ScenarioContent {
+  return { title, hook, mainPoints, angle, example, callToAction };
 }
 
 export async function getScenario(db: Db, ideaId: string) {

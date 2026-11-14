@@ -12,11 +12,11 @@ import {
   IdeaDraftSchema,
   IdeaTextBatchSchema,
   EditProposalSchema,
-  IdeaReviewSchema,
   LessonUpdateSchema,
   ReviewSchema,
   InstagramPieceSchema,
   VideoPieceSchema,
+  ScenarioPlanSchema,
   ScenarioSchema,
   SocialPieceSchema,
   type Feedback,
@@ -205,6 +205,17 @@ const PLATFORM_RULES: Record<Platform, string> = {
   website: `Platform: {OWNER}'s website blog. Write 700 to 1,200 words. Use ## and ### headings, short paragraphs and lists only where they help. Link a claim to its source as [label](url), using only the URLs supplied in <sources>. The Markdown supports headings, lists, quotes, bold, italic, code and links only.`,
 };
 
+/** What each channel is for, so the scenario writer can say which ones fit an idea. */
+const CHANNEL_JOBS = `Channels (use these exact codes):
+- telegram: a short insider note for {OWNER}'s close followers
+- linkedin: the business case for business owners and decision-makers
+- instagram: an Instagram carousel that teaches one thing, slide by slide
+- website: the complete, lasting article on the topic, found by search
+- reel: a 30 to 60 second vertical video with one sharp insight
+- short: a vertical video under 50 seconds answering one searched question
+- youtube: a 6 to 10 minute walkthrough with a demonstration
+- linkedin_video: a short captioned video on a business result`;
+
 const DISTINCT = `{OWNER} posts this idea on several platforms, and each gets its own version for its audience and format. Write something that belongs only on this platform and would look out of place pasted on another.`;
 
 const schemaFor = (platform: Platform) =>
@@ -310,7 +321,7 @@ Return exactly ${ideas.length} ideas in the same order. For pillar, copy the mat
       );
     },
 
-    writeScenario(context, { idea, sources, feedback }) {
+    writeScenario(context, { idea, sources }) {
       return run(
         "storyteller",
         context,
@@ -318,9 +329,12 @@ Return exactly ${ideas.length} ideas in the same order. For pillar, copy the mat
 
 ${SCENARIO_RULES}
 
+Then advise {OWNER} on channels. Not every idea belongs everywhere, and posting the same idea on every channel wears out their audience. For each channel below, score from 1 to 5 how well this idea fits that channel's job and audience, and mark the 1 to 3 channels worth making it for as recommended. For each channel, give the angle its post would take, different from the other channels, and a two or three sentence brief for its writer.
+${CHANNEL_JOBS}
+
 <idea>${JSON.stringify(idea)}</idea>
-<sources>${JSON.stringify(sources)}</sources>${feedbackBlock(feedback)}`,
-        ScenarioSchema,
+<sources>${JSON.stringify(sources)}</sources>`,
+        ScenarioPlanSchema,
       );
     },
 
@@ -349,13 +363,23 @@ Keep the same main points in the same order.
       );
     },
 
-    writePiece(context, { platform, scenario, sources, feedback }) {
+    writePiece(context, { platform, scenario, sources, channel, feedback }) {
       return run(
         agentForPlatform(platform),
         context,
         `{OWNER} approved this scenario. Turn it into one piece of content that does the job your Skill gives this channel.
 
-${PLATFORM_RULES[platform]}
+${PLATFORM_RULES[platform]}${
+          channel
+            ? `
+
+The scenario writer planned this channel's post. Follow it unless it breaks a rule above.
+<channel_brief>
+Angle: ${channel.angle}
+Brief: ${channel.brief}
+</channel_brief>`
+            : ""
+        }
 
 ${DISTINCT}
 
@@ -406,46 +430,6 @@ Rules for this platform: ${PLATFORM_RULES[platform]}
 <post>${JSON.stringify(content)}</post>
 <request>${request}</request>`,
         schemaFor(platform),
-      );
-    },
-
-    reviewIdeas(context, { ideas, results, pastTitles }) {
-      return run(
-        "manager",
-        context,
-        `Your idea scout proposed these ${ideas.length} content ideas for {OWNER}. Check each one before they see it.
-
-A good idea is timely, useful to their audience, fits one of their content pillars, and carries an opinion only {OWNER} would bring. Score it lower when it is generic, a near repeat of a past idea, off their pillars, or claims something about now that its sources don't support. An evergreen idea without sources is fine when it says so.
-
-${REVIEW_STANDARD}${writerInstructions(context, "scout")}
-
-<ideas>
-${ideas.map((idea, index) => `${index + 1}. ${JSON.stringify(idea)}`).join("\n")}
-</ideas>
-<past_ideas>
-${pastTitles.length ? pastTitles.map((title) => `- ${title}`).join("\n") : "- (none yet)"}
-</past_ideas>
-<search_results>
-${JSON.stringify(results.map(({ title, url, publishedDate }) => ({ title, url, publishedDate })))}
-</search_results>`,
-        IdeaReviewSchema,
-      );
-    },
-
-    reviewScenario(context, { idea, scenario, sources }) {
-      return run(
-        "manager",
-        context,
-        `Your scenario writer wrote this scenario for an idea {OWNER} approved. Check it before they see it. It must follow these rules:
-
-${SCENARIO_RULES}
-
-${REVIEW_STANDARD}${writerInstructions(context, "storyteller")}
-
-<idea>${JSON.stringify(idea)}</idea>
-<sources>${JSON.stringify(sources)}</sources>
-<draft>${JSON.stringify(scenario)}</draft>`,
-        ReviewSchema,
       );
     },
 
@@ -537,8 +521,6 @@ export const studioWriter: WritingModel = {
   writePiece: (...args) => activeWriter().writePiece(...args),
   revisePiece: (...args) => activeWriter().revisePiece(...args),
   planEdit: (...args) => activeWriter().planEdit(...args),
-  reviewIdeas: (...args) => activeWriter().reviewIdeas(...args),
-  reviewScenario: (...args) => activeWriter().reviewScenario(...args),
   reviewPiece: (...args) => activeWriter().reviewPiece(...args),
   learn: (...args) => activeWriter().learn(...args),
 };

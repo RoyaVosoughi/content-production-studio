@@ -35,9 +35,14 @@ export default async function StudioPage({ params }: { params: Promise<{ lang: s
             <li>{t.welcomeStep2}</li>
             <li>{t.welcomeStep3}</li>
           </ol>
-          <Link href={`/${lang}/brand`} className="btn btn-primary mt-5">
-            {t.welcomeStart}
-          </Link>
+          <div className="mt-5 flex flex-wrap items-center gap-3">
+            <Link href={`/${lang}/brand`} className="btn btn-primary">
+              {t.welcomeStart}
+            </Link>
+            <Link href={`/${lang}/guide`} className="text-sm font-medium text-cobalt underline-offset-4 hover:underline">
+              {t.guideLink}
+            </Link>
+          </div>
         </section>
       )}
       <ScoutProgress initial={job} text={scoutProgressText(t)} />

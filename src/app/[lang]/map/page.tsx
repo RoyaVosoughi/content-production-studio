@@ -14,6 +14,7 @@ import type { Strings } from "@/lib/i18n";
 import { languageName, textDirection, type Language, type UiLanguage } from "@/lib/language";
 import { loadMap, WRITERS, type MapData, type MapNodeId, type MapPiece, type MapScenario } from "@/lib/map";
 import { platformLabel } from "@/lib/platforms";
+import { closestPublished, ideaTopic, publishedIdeas } from "@/lib/duplicate";
 import { upcomingPosts } from "@/lib/schedule";
 import { scheduleLabel } from "@/lib/schedule-time";
 import { readyPage } from "@/lib/view";
@@ -70,6 +71,10 @@ export default async function StudioMapPage({
       <p className="mt-3 text-ink-soft">
         <Link href={`/${lang}`} className="text-cobalt underline underline-offset-2">
           {t.mapAskAgain}
+        </Link>
+        {" · "}
+        <Link href={`/${lang}/guide`} className="text-cobalt underline underline-offset-2">
+          {t.guideLink}
         </Link>
       </p>
 
@@ -160,6 +165,7 @@ async function ScoutWork({ db, ui, view, t }: { db: Db; ui: UiLanguage; view: La
   const approved = rows.filter((idea) => idea.status === "approved");
   const rejected = rows.filter((idea) => idea.status === "rejected");
   const verdicts = await latestVerdicts(db, proposed.map((idea) => idea.pairId));
+  const published = proposed.length ? await publishedIdeas(db, view) : [];
   return (
     <>
       <h3 className="font-display text-xl font-semibold">
@@ -176,6 +182,7 @@ async function ScoutWork({ db, ui, view, t }: { db: Db; ui: UiLanguage; view: La
               ui={ui}
               language={view}
               verdict={verdicts.get(idea.pairId)}
+              repeats={closestPublished(ideaTopic(idea), published)}
               t={t}
             />
           ))}

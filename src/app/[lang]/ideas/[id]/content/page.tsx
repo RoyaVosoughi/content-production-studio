@@ -19,6 +19,7 @@ import { studioProgress } from "@/lib/progress";
 import { isPlatform, isVideoPlatform, platformLabel, PLATFORMS, TEXT_PLATFORMS, VIDEO_PLATFORMS, type Platform } from "@/lib/platforms";
 import { PUBLISHERS } from "@/lib/publishers";
 import { getScenario, getSibling } from "@/lib/studio";
+import { channelOrder } from "@/lib/channels";
 import { localTimeValue, schedulesFor, type Schedule } from "@/lib/schedule";
 import { scheduleLabel } from "@/lib/schedule-time";
 
@@ -131,7 +132,53 @@ export default async function ContentPage({ params }: { params: Promise<{ lang: 
             <input type="hidden" name="ui" value={lang} />
             <fieldset>
               <legend className="font-display text-lg font-semibold">{t.choosePlatforms}</legend>
-              {[
+              {scenario?.channels?.length ? (
+                <>
+                  <p className="mt-1 text-sm text-ink-soft">{t.channelAdviceHint}</p>
+                  <div className="mt-3 grid gap-2">
+                    {channelOrder(scenario.channels)
+                      .filter((platform) => available.includes(platform))
+                      .map((platform) => {
+                        const pick = scenario.channels?.find((item) => item.platform === platform);
+                        return (
+                          <label
+                            key={platform}
+                            className={`flex items-start gap-3 rounded-lg border p-3 ${pick?.recommended ? "border-cobalt" : "border-mist"}`}
+                          >
+                            <input
+                              type="checkbox"
+                              name="platforms"
+                              value={platform}
+                              defaultChecked={pick?.recommended ?? false}
+                              className="mt-1 size-4 shrink-0 accent-cobalt"
+                            />
+                            <span className="min-w-0">
+                              <span className="flex flex-wrap items-center gap-2 font-medium">
+                                {platformLabel(platform, lang)}
+                                {pick && (
+                                  <span className="label" aria-label={t.channelFit.replace("{score}", String(pick.score))}>
+                                    {"●".repeat(pick.score)}
+                                    <span className="opacity-30">{"●".repeat(5 - pick.score)}</span>
+                                  </span>
+                                )}
+                                {pick?.recommended && (
+                                  <span className="rounded-full bg-cobalt/20 px-2 py-0.5 text-xs font-semibold text-periwinkle">
+                                    {t.channelRecommended}
+                                  </span>
+                                )}
+                              </span>
+                              {pick?.angle && (
+                                <span className="mt-0.5 block text-sm text-ink-soft" lang={language} dir={textDirection(language)}>
+                                  {pick.angle}
+                                </span>
+                              )}
+                            </span>
+                          </label>
+                        );
+                      })}
+                  </div>
+                </>
+              ) : [
                 { label: t.groupPosts, hint: null, platforms: TEXT_PLATFORMS as readonly Platform[] },
                 { label: t.groupVideos, hint: t.groupVideosHint, platforms: VIDEO_PLATFORMS as readonly Platform[] },
               ].map((group) => {

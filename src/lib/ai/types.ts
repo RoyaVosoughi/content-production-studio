@@ -3,7 +3,7 @@ import { AGENT_IDS, type AgentId } from "../agents/roster";
 import type { BrandKitFields } from "../brand-seed";
 import type { PieceContent, SampleMeasures, ScenarioContent, ScriptPart } from "../db/schema";
 import type { Language } from "../language";
-import type { Platform, VideoPlatform } from "../platforms";
+import { PLATFORMS, type Platform, type VideoPlatform } from "../platforms";
 
 export const IdeaDraftSchema = z.object({
   title: z.string(),
@@ -36,6 +36,20 @@ export const ScenarioSchema = z.object({
   example: z.string(),
   callToAction: z.string(),
 }) satisfies z.ZodType<ScenarioContent>;
+
+/** The scenario writer's advice on channels, written with the scenario in the same request. */
+export const ChannelPickSchema = z.object({
+  platform: z.enum(PLATFORMS),
+  score: z.number().describe("1 to 5: how well this idea fits this channel's job and audience"),
+  recommended: z.boolean().describe("true for the 1 to 3 channels worth making this idea for"),
+  angle: z.string().describe("The angle this channel's post takes, different from the other channels. One sentence"),
+  brief: z.string().describe("Two or three sentences for this channel's writer: what to focus on and what to leave out"),
+});
+export type ChannelPickDraft = z.infer<typeof ChannelPickSchema>;
+
+export const ScenarioPlanSchema = ScenarioSchema.extend({
+  channels: z.array(ChannelPickSchema).describe("Every channel, scored"),
+});
 
 export const SocialPieceSchema = z.object({ body: z.string().describe("The complete post, exactly as it will appear") });
 
@@ -103,21 +117,6 @@ export const ReviewSchema = z.object({
   ...NOTE,
 });
 export type Review = z.infer<typeof ReviewSchema>;
-
-export const IdeaReviewSchema = z.object({
-  ideas: z
-    .array(
-      z.object({
-        number: z.number().describe("The idea's number, as given"),
-        score: z.number().describe("1 to 10. 7 or more means it's worth the author's time"),
-        problem: z.string().describe("In English: what is weak about it, for the scout. Empty when it passes"),
-        ...NOTE,
-      }),
-    )
-    .describe("One entry per idea, in order"),
-  instructions: z.string().describe("For the scout: how to replace the ideas that scored below 7. Empty if all pass"),
-});
-export type IdeaReview = z.infer<typeof IdeaReviewSchema>;
 
 export const LessonUpdateSchema = z.object({
   agents: z.array(
@@ -190,17 +189,25 @@ export interface WritingModel {
   adaptIdeas(context: WritingContext, input: { ideas: IdeaText[] }): Promise<IdeaText[]>;
   reviseIdea(context: WritingContext, input: { idea: IdeaDraft; request: string }): Promise<IdeaDraft>;
   adaptScenario(context: WritingContext, input: { scenario: ScenarioContent }): Promise<ScenarioContent>;
+  /** The scenario, and in the same request the writer's advice on which channels fit it. */
   writeScenario(
     context: WritingContext,
-    input: { idea: Omit<IdeaDraft, "sourceUrls">; sources: { title: string; url: string }[]; feedback?: Feedback },
-  ): Promise<ScenarioContent>;
+    input: { idea: Omit<IdeaDraft, "sourceUrls">; sources: { title: string; url: string }[] },
+  ): Promise<ScenarioContent & { channels?: ChannelPickDraft[] }>;
   reviseScenario(
     context: WritingContext,
     input: { scenario: ScenarioContent; request: string },
   ): Promise<ScenarioContent>;
   writePiece(
     context: WritingContext,
-    input: { platform: Platform; scenario: ScenarioContent; sources: { title: string; url: string }[]; feedback?: Feedback },
+    input: {
+      platform: Platform;
+      scenario: ScenarioContent;
+      sources: { title: string; url: string }[];
+      /** The scenario writer's angle and brief for this channel, when it gave one. */
+      channel?: { angle: string; brief: string };
+      feedback?: Feedback;
+    },
   ): Promise<PieceContent>;
   revisePiece(
     context: WritingContext,
@@ -220,15 +227,7 @@ export interface WritingModel {
       request?: string;
     },
   ): Promise<EditProposal>;
-  /** The manager checks a batch of ideas. */
-  reviewIdeas(
-    context: WritingContext,
-    input: { ideas: IdeaDraft[]; results: SearchResult[]; pastTitles: string[] },
-  ): Promise<IdeaReview>;
-  reviewScenario(
-    context: WritingContext,
-    input: { idea: Omit<IdeaDraft, "sourceUrls">; scenario: ScenarioContent; sources: { title: string; url: string }[] },
-  ): Promise<Review>;
+  /** The manager checks a channel's final draft. Ideas and scenarios are checked by you. */
   reviewPiece(
     context: WritingContext,
     input: { platform: Platform; content: PieceContent; scenario: ScenarioContent; sources: { title: string; url: string }[] },

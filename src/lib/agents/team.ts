@@ -176,8 +176,8 @@ function cleanScore(score: number) {
 
 /**
  * The manager's check of one draft. A broken platform rule is caught by the studio without an AI
- * request. Weak work goes back to its writer once, with the manager's reasons; the second draft is
- * kept either way, so a check never costs more than two extra requests.
+ * request, even when the manager is switched off. Weak work goes back to its writer once, with the
+ * manager's reasons; the second draft is kept either way, so a check never costs more than two extra requests.
  *
  * The check never blocks the work: if the manager or the rewrite fails, you get the draft you
  * would have had without the manager.
@@ -203,10 +203,11 @@ export async function managerCheck<T>(
     rewrite: (feedback: Feedback) => Promise<T>;
   },
 ): Promise<{ draft: T; verdict: Verdict | null }> {
-  if (!enabled) return { draft, verdict: null };
+  // The rule checks are free, so they run even with the manager switched off.
+  const broken = ruleProblem?.(draft);
+  if (!enabled && !broken) return { draft, verdict: null };
 
   let found: Review | null = null;
-  const broken = ruleProblem?.(draft);
   if (broken) {
     found = {
       score: 3,

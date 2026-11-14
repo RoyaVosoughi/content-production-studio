@@ -1,3 +1,4 @@
+import { pickFor } from "./channels";
 import { samplesForEdit } from "./agents/editor/samples";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { agentForPlatform } from "./agents/roster";
@@ -121,6 +122,7 @@ export async function createPieces(
         platform,
         scenario: scenario.current.content,
         sources: version.sources.map(({ title, url }) => ({ title, url })),
+        channel: pickFor(scenario.channels, platform),
         finish: (draft) => (platform === "website" ? { ...draft, slug } : draft),
       });
       const content = written;
@@ -171,16 +173,19 @@ async function writeChecked(
     platform,
     scenario,
     sources,
+    channel,
     finish,
   }: {
     platform: Platform;
     scenario: ScenarioContent;
     sources: { title: string; url: string }[];
+    /** The angle and brief the scenario writer gave this channel. */
+    channel?: { angle: string; brief: string };
     /** Fields the studio adds to the writer's draft, such as the article's web address. */
     finish: (draft: PieceContent) => PieceContent;
   },
 ) {
-  const brief = { platform, scenario, sources };
+  const brief = { platform, scenario, sources, channel };
   return managerCheck(db, {
     enabled,
     agent: agentForPlatform(platform),
@@ -347,6 +352,7 @@ export async function rewritePieceFromScenario({ db, writer }: StudioDeps, piece
     platform: piece.platform,
     scenario: scenario.current.content,
     sources: idea.sources.map(({ title, url }) => ({ title, url })),
+    channel: pickFor(scenario.channels, piece.platform),
     finish: (written) => ({ ...old.content, ...written }),
   });
   await addVersion(db, pieceId, basedOn, draft, "ai", scenario.currentVersion);
@@ -574,7 +580,7 @@ export async function markPostedByHand(db: Db, pieceId: string, version: number,
     } catch {}
     if (!manual.hosts.some((allowed) => host === allowed || host.endsWith(`.${allowed}`))) {
       throw new StudioError(
-        `The link should be the ${PLATFORM_NAMES[piece.platform]} address of your post, starting with https://www.${manual.hosts[0]}/`,
+        `The link should be the ${PLATFORM_NAMES[piece.platform].replace(/ carousel$/, "")} address of your post, starting with https://www.${manual.hosts[0]}/`,
       );
     }
   }

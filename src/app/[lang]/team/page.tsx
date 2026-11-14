@@ -35,7 +35,12 @@ export default async function TeamPage({ params }: { params: Promise<{ lang: str
   return (
     <>
       <h1 className="font-display text-4xl font-semibold leading-tight md:text-5xl">{t.teamTitle}</h1>
-      <p className="mt-3 max-w-xl text-ink-soft">{t.teamIntro}</p>
+      <p className="mt-3 max-w-xl text-ink-soft">
+        {t.teamIntro}{" "}
+        <Link href={`/${lang}/guide`} className="text-cobalt underline underline-offset-2">
+          {t.guideLink}
+        </Link>
+      </p>
 
       <p className="mt-4 max-w-2xl rounded-lg border-s-4 border-cobalt bg-paper p-3 text-sm">
         {t.teamSkillsNote}{" "}

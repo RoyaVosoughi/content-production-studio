@@ -62,8 +62,8 @@ export const AGENTS: Record<AgentId, AgentProfile> = {
   storyteller: {
     name: { en: "Scenario Writer", fa: "سناریونویس" },
     job: {
-      en: "Turns an approved idea into the core story every post is built from.",
-      fa: "ایده‌ی تأییدشده را به داستان اصلی‌ای تبدیل می‌کند که همه‌ی پست‌ها از آن ساخته می‌شوند.",
+      en: "Turns an approved idea into the core story every post is built from, and recommends the 1 to 3 channels it fits best, with a brief for each.",
+      fa: "ایده‌ی تأییدشده را به داستان اصلی‌ای تبدیل می‌کند که همه‌ی پست‌ها از آن ساخته می‌شوند، و ۱ تا ۳ کانالی را که بیشترین تناسب را دارند، هر کدام با یک brief، پیشنهاد می‌دهد.",
     },
     example: {
       en: "Build every story around one real problem my clients have.",
@@ -93,7 +93,7 @@ export const AGENTS: Record<AgentId, AgentProfile> = {
     },
   },
   carousel: {
-    name: { en: "Carousel Designer", fa: "طراح کاروسل" },
+    name: { en: "Instagram Carousel Designer", fa: "طراح کاروسل اینستاگرام" },
     job: {
       en: "Writes Instagram carousels that teach one thing, slide by slide.",
       fa: "کاروسل اینستاگرام را می‌نویسد که اسلاید به اسلاید یک چیز را آموزش می‌دهد.",
@@ -139,8 +139,8 @@ export const AGENTS: Record<AgentId, AgentProfile> = {
   manager: {
     name: { en: "Manager", fa: "مدیر" },
     job: {
-      en: "Checks every first draft before you see it, scores it and sends weak work back once.",
-      fa: "هر پیش‌نویس اول را پیش از شما بررسی می‌کند، به آن نمره می‌دهد و کار ضعیف را یک بار برمی‌گرداند.",
+      en: "Checks each channel's first draft before you see it, scores it and sends weak work back once. Ideas and scenarios come straight to you.",
+      fa: "پیش‌نویس اول هر کانال را پیش از شما بررسی می‌کند، به آن نمره می‌دهد و کار ضعیف را یک بار برمی‌گرداند. ایده‌ها و سناریوها مستقیم به خود شما می‌رسند.",
     },
     example: {
       en: "Be strict about the hook. Send back anything that sounds like generic AI writing.",

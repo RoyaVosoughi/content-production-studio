@@ -107,6 +107,7 @@ export function StudioMap({
           const node = state[id];
           const href = hrefs[id];
           const name = id === "live" ? t.mapLive : AGENTS[id].name[ui];
+          const role = id === "live" ? undefined : AGENTS[id].job[ui];
           const status = statusText(id);
           const style = {
             left: `${spot.x / 10}%`,
@@ -130,13 +131,14 @@ export function StudioMap({
               scroll={false}
               className={className}
               style={style}
+              title={role}
               data-status={node.status}
               aria-current={selected.includes(id) ? "step" : undefined}
             >
               {body}
             </Link>
           ) : (
-            <span key={id} className={className} style={style} data-status={node.status}>
+            <span key={id} className={className} style={style} title={role} data-status={node.status}>
               {body}
             </span>
           );
