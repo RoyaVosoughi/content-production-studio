@@ -104,11 +104,13 @@ export function VideoEditor({ piece, video, language, t }: { piece: EditorPiece;
                 <span aria-hidden className="font-display text-lg font-semibold text-cobalt">
                   {(index + 1).toLocaleString(uiLocale(language))}
                 </span>
-                <div className="min-w-0" dir="auto">
-                  <p className="leading-relaxed">{part.say}</p>
+                <div className="min-w-0">
+                  <p dir="auto" className="leading-relaxed">
+                    {part.say}
+                  </p>
                   {part.show && (
                     <p className="mt-1 text-sm text-ink-soft">
-                      <span className="font-semibold">{t.scriptShow}:</span> {part.show}
+                      <span className="font-semibold">{t.scriptShow}:</span> <bdi>{part.show}</bdi>
                     </p>
                   )}
                 </div>
