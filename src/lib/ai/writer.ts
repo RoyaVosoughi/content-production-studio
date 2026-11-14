@@ -1,8 +1,7 @@
 import type { z } from "zod";
 import { agentForPlatform, AGENTS, type AgentId } from "../agents/roster";
 import { languageInfo } from "../language";
-import { claudeJson } from "./claude";
-import { openRouterJson } from "./openrouter";
+import { routedGenerate } from "./routing";
 import { isVideoPlatform, PLATFORM_NAMES, VIDEO_FORMATS, type Platform, type VideoPlatform } from "../platforms";
 import type { SampleMeasures } from "../db/schema";
 import { loadEditPrompts, selectEditPrompts, type EditPrompt } from "../agents/editor/edit-prompts";
@@ -25,7 +24,13 @@ import {
 } from "./types";
 
 /** Sends one prompt to an AI provider and returns an answer that matches the schema. */
-export type GenerateJson = <S extends z.ZodType>(system: string, prompt: string, schema: S) => Promise<z.infer<S>>;
+/** Asks an AI for JSON matching the schema. `meta.agent` says which team member is asking, so the right model answers. */
+export type GenerateJson = <S extends z.ZodType>(
+  system: string,
+  prompt: string,
+  schema: S,
+  meta?: { agent?: AgentId },
+) => Promise<z.infer<S>>;
 
 /** Tells the scout which results are links {OWNER} pasted, so the ideas answer them first. */
 function sharedBlock(shared: { urls: string[]; failed: string[] } | undefined): string {
@@ -246,7 +251,7 @@ ${prompts.map((prompt) => `<prompt title="${prompt.title}" studio="${prompt.stud
 
 export function createWriter(generate: GenerateJson): WritingModel {
   const run = <S extends z.ZodType>(agent: AgentId, context: WritingContext, prompt: string, schema: S) =>
-    generate(buildSystemPrompt(context, agent), personalize(prompt, context), schema);
+    generate(buildSystemPrompt(context, agent), personalize(prompt, context), schema, { agent });
 
   return {
     async generateIdeas(context, { count, focus, shared, results, pastTitles, today, performance = [], feedback }) {
@@ -502,9 +507,9 @@ ${entry.signals.map((signal) => `- [${signal.kind}, ${signal.language}] ${signal
   };
 }
 
-/** Claude when its key is set; otherwise OpenRouter's free models. */
+/** Each team member's work goes to its own model: see routing.ts. */
 function activeWriter(): WritingModel {
-  return createWriter(process.env.ANTHROPIC_API_KEY ? claudeJson : openRouterJson);
+  return createWriter(routedGenerate);
 }
 
 export const studioWriter: WritingModel = {

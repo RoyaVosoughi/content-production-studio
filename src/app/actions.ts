@@ -414,9 +414,8 @@ export async function readBrandFileAction(_: BrandFileState, form: FormData): Pr
     const db = await getDb();
     const profile = await requireProfile(db);
     const text = await brandFileText(file);
-    const { claudeJson } = await import("@/lib/ai/claude");
-    const { openRouterJson } = await import("@/lib/ai/openrouter");
-    const proposal = await proposeBrandKits(process.env.ANTHROPIC_API_KEY ? claudeJson : openRouterJson, {
+    const { routedJson } = await import("@/lib/ai/routing");
+    const proposal = await proposeBrandKits(routedJson("setup"), {
       text,
       languages: profile.languages,
       ownerName: profile.name,
@@ -516,9 +515,8 @@ export async function readInstructionsFileAction(_: InstructionsFileState, form:
     const db = await getDb();
     const profile = await requireProfile(db);
     const [fileText, current] = await Promise.all([brandFileText(file), team.getInstructions(db, agent)]);
-    const { claudeJson } = await import("@/lib/ai/claude");
-    const { openRouterJson } = await import("@/lib/ai/openrouter");
-    const proposal = await proposeInstructions(process.env.ANTHROPIC_API_KEY ? claudeJson : openRouterJson, {
+    const { routedJson } = await import("@/lib/ai/routing");
+    const proposal = await proposeInstructions(routedJson("setup"), {
       agent,
       text: fileText,
       ownerName: profile.name,

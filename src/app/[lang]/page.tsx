@@ -15,7 +15,7 @@ export default async function StudioPage({ params }: { params: Promise<{ lang: s
   const job = currentScoutJob();
 
   const missingKeys = [
-    ...(process.env.OPENROUTER_API_KEY || process.env.ANTHROPIC_API_KEY ? [] : ["OPENROUTER_API_KEY"]),
+    ...(process.env.GEMINI_API_KEY || process.env.OPENROUTER_API_KEY ? [] : ["GEMINI_API_KEY"]),
     ...(process.env.TAVILY_API_KEY ? [] : ["TAVILY_API_KEY"]),
   ];
 

@@ -1,5 +1,7 @@
 import { z } from "zod";
 import { StudioError } from "../errors";
+import { AiUnavailableError } from "./errors";
+import { recordRequest } from "./usage";
 import type { GenerateJson } from "./writer";
 
 const ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
@@ -44,6 +46,8 @@ async function askModel(apiKey: string, model: string, system: string, prompt: s
     });
   } catch (error) {
     return { model, reason: "offline", detail: String(error) };
+  } finally {
+    await recordRequest(`openrouter:${model}`);
   }
 
   const body = await response.json().catch(() => null);
@@ -74,19 +78,20 @@ async function requestAnswer(apiKey: string, system: string, prompt: string): Pr
     misses.push(result);
   }
   if (misses.every((miss) => miss.reason === "limit")) {
-    throw new StudioError(
-      "The free AI limit was reached: 20 requests a minute and 50 a day. Wait a minute and try again. If it still fails, try again tomorrow.",
+    throw new AiUnavailableError(
+      "OpenRouter's free limit was reached (about 20 requests a minute and 50 a day). Wait a minute and try again, or try again tomorrow.",
+      "limit",
     );
   }
   if (misses.every((miss) => miss.reason === "offline")) {
-    throw new StudioError("Couldn't reach OpenRouter. Check your connection and try again.");
+    throw new AiUnavailableError("Couldn't reach OpenRouter. Check your connection and try again.", "offline");
   }
-  throw new StudioError("None of the free AI models answered, so nothing was saved. Please try again in a few minutes.");
+  throw new AiUnavailableError("None of the free AI models answered, so nothing was saved. Please try again in a few minutes.", "busy");
 }
 
 export const openRouterJson: GenerateJson = async (system, prompt, schema) => {
   const apiKey = process.env.OPENROUTER_API_KEY;
-  if (!apiKey) throw new StudioError("Add OPENROUTER_API_KEY to .env.local to use the AI writer.");
+  if (!apiKey) throw new AiUnavailableError("No OPENROUTER_API_KEY is set.", "offline");
   const shape = JSON.stringify(z.toJSONSchema(schema));
   const fullPrompt = `${prompt}\n\nAnswer with one JSON object and nothing else. It must match this JSON Schema:\n${shape}`;
 
@@ -99,5 +104,5 @@ export const openRouterJson: GenerateJson = async (system, prompt, schema) => {
       // Falls through to the retry.
     }
   }
-  throw new StudioError("The free AI model's answer was unusable, so nothing was saved. Please try again.");
+  throw new AiUnavailableError("The free AI model's answer was unusable, so nothing was saved. Please try again.", "busy");
 };

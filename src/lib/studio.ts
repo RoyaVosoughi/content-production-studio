@@ -31,7 +31,8 @@ import { getProfile, requireProfile } from "./profile";
 import { performanceBrief } from "./results";
 import { hasPlaceholder } from "./scenario";
 
-export const IDEA_BATCH_SIZE = 10;
+/** Five strong ideas a run: fewer AI words to write and check, and fewer to read through. */
+export const IDEA_BATCH_SIZE = 5;
 const MAX_SEARCH_QUERIES = 4;
 const PAST_TITLES_LIMIT = 100;
 const STALE_SCENARIO = "This scenario changed since you opened it. Reload and review the latest version.";

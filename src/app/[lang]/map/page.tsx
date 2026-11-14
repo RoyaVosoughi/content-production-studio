@@ -57,7 +57,7 @@ export default async function StudioMapPage({
   const hrefs = Object.fromEntries(available.map((id) => [id, `/${lang}/map?agent=${id}`]));
 
   const missingKeys = [
-    ...(process.env.OPENROUTER_API_KEY || process.env.ANTHROPIC_API_KEY ? [] : ["OPENROUTER_API_KEY"]),
+    ...(process.env.GEMINI_API_KEY || process.env.OPENROUTER_API_KEY ? [] : ["GEMINI_API_KEY"]),
     ...(process.env.TAVILY_API_KEY ? [] : ["TAVILY_API_KEY"]),
   ];
 

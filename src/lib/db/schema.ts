@@ -328,6 +328,17 @@ export const teamSettings = pgTable("team_settings", {
   lastLearnSummary: jsonb("last_learn_summary").$type<{ en: string; fa: string }>(),
 });
 
+/** AI requests sent per model per day, for the usage counter. The day follows Google's quota day (Pacific time). */
+export const aiUsage = pgTable(
+  "ai_usage",
+  {
+    day: text("day").notNull(),
+    model: text("model").notNull(),
+    requests: integer("requests").notNull().default(0),
+  },
+  (table) => [primaryKey({ columns: [table.day, table.model] })],
+);
+
 /** The one person the studio works for. See lib/profile.ts. */
 export const profiles = pgTable("profile", {
   id: integer("id").primaryKey(),
@@ -517,6 +528,12 @@ CREATE TABLE IF NOT EXISTS team_settings (
   last_learned_at timestamptz,
   last_learn_error text,
   last_learn_summary jsonb
+);
+CREATE TABLE IF NOT EXISTS ai_usage (
+  day text NOT NULL,
+  model text NOT NULL,
+  requests integer NOT NULL DEFAULT 0,
+  PRIMARY KEY (day, model)
 );
 CREATE TABLE IF NOT EXISTS profile (
   id integer PRIMARY KEY,

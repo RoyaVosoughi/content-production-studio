@@ -189,6 +189,9 @@ async function writeChecked(
     ruleProblem: (draft) => {
       const problem = contentProblem(platform, draft);
       if (problem) return problem;
+      if (hasPlaceholder(postedText(platform, draft))) {
+        return "It still has text in square brackets. Replace every placeholder with real words from the scenario or sources.";
+      }
       const links = uncheckedLinks(draft.body, sources);
       return links.length ? `It links to addresses that aren't in the sources: ${links.join(", ")}. Use only the supplied sources.` : null;
     },
