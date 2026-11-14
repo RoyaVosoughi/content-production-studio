@@ -56,7 +56,7 @@ function SlotCard({ slot, ui, t }: { slot: Slot; ui: UiLanguage; t: Strings }) {
   }
   const post = slot.post;
   const title = (
-    <Link href={`/${ui}/ideas/${post.ideaId}/content`} className="mt-1 block font-medium hover:text-cobalt">
+    <Link href={`/${ui}/ideas/${post.ideaId}/content#post-${post.platform}`} className="mt-1 block font-medium hover:text-cobalt">
       <bdi>{post.title}</bdi>
     </Link>
   );
@@ -191,7 +191,7 @@ export default async function CalendarPage({
               <li key={post.pieceId} className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-paper p-3">
                 <span className="min-w-0">
                   <span className="label block">{platformLabel(post.platform, lang)}</span>
-                  <Link href={`/${lang}/ideas/${post.ideaId}/content`} className="font-medium hover:text-cobalt">
+                  <Link href={`/${lang}/ideas/${post.ideaId}/content#post-${post.platform}`} className="font-medium hover:text-cobalt">
                     <bdi>{post.title}</bdi>
                   </Link>
                 </span>

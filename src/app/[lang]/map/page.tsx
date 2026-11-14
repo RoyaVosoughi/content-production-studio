@@ -248,7 +248,7 @@ function PieceList({ rows, ui, t, withVideo }: { rows: MapPiece[]; ui: UiLanguag
       {rows.map((piece) => (
         <li key={piece.id}>
           <Link
-            href={`/${ui}/ideas/${piece.idea.id}/content`}
+            href={`/${ui}/ideas/${piece.idea.id}/content#post-${piece.platform}`}
             className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 py-3 hover:text-cobalt"
           >
             <span className="min-w-0">
@@ -286,7 +286,7 @@ async function LiveWork({ map, db, ui, t }: { map: MapData; db: Db; ui: UiLangua
               return (
                 <li key={post.pieceId} data-upcoming={post.status}>
                   <Link
-                    href={`/${ui}/ideas/${post.ideaId}/content`}
+                    href={`/${ui}/ideas/${post.ideaId}/content#post-${post.platform}`}
                     className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 py-3 hover:text-cobalt"
                   >
                     <span className="min-w-0">

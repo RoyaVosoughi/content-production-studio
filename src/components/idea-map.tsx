@@ -29,7 +29,15 @@ export async function IdeaMap({
   const hrefs: Partial<Record<MapNodeId, string>> = {
     scout: `/${ui}/map?agent=scout`,
     storyteller: `/${ui}/ideas/${idea.id}`,
-    ...Object.fromEntries([...WRITERS, "editor", "live"].map((id) => [id, content])),
+    // Each writer jumps to its own post on the page, so it isn't lost below the others.
+    ...Object.fromEntries(
+      [...WRITERS, "editor", "live"].map((id) => {
+        const own = map.pieces.find((piece) =>
+          id === "editor" ? piece.video !== null && piece.idea.id === idea.id : piece.agent === id && piece.idea.id === idea.id,
+        );
+        return [id, own ? `${content}#post-${own.platform}` : content];
+      }),
+    ),
     manager: `/${ui}/team/manager`,
     coach: `/${ui}/team/coach`,
   };

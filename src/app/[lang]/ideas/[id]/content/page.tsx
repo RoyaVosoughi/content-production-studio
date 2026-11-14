@@ -269,7 +269,7 @@ export default async function ContentPage({ params }: { params: Promise<{ lang: 
             <ManagerNote verdict={verdict} language={lang} t={t} />
           );
           return (
-            <div key={`${piece.id}-${piece.currentVersion}`} className="space-y-2">
+            <div key={`${piece.id}-${piece.currentVersion}`} id={`post-${platform}`} className="scroll-mt-24 space-y-2">
               {note}
               {video ? (
                 <VideoEditor piece={editorPiece} video={video} language={lang} t={t} />
