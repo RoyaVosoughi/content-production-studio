@@ -28,9 +28,10 @@ export function sectionOf(pathname: string, language: UiLanguage): { id: Section
 }
 
 function sections(language: UiLanguage, t: Strings, ready: boolean) {
-  // Until Setup is saved, Setup is the only place to go. After that, Setup and Brand Kit are reached from the Agents page.
+  // Until Setup is saved, Setup is the only place to go. After that, Setup is reached from the Agents page.
   if (!ready) return [{ id: "setup" as SectionId, href: `/${language}/setup`, label: t.navSetup }];
   const all: { id: SectionId; href: string; label: string }[] = [
+    { id: "brand", href: `/${language}/brand`, label: t.navBrand },
     { id: "ideas", href: `/${language}`, label: t.navStudio },
     { id: "team", href: `/${language}/team`, label: t.navTeam },
     { id: "results", href: `/${language}/results`, label: t.navResults },

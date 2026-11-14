@@ -2,7 +2,10 @@ import { desc, eq } from "drizzle-orm";
 import Link from "next/link";
 import type { CSSProperties } from "react";
 import { IdeaRow, ProposedIdeaCard } from "@/components/idea-card";
+import { ScoutProgress } from "@/components/scout-progress";
 import { StudioMap } from "@/components/studio-map";
+import { scoutProgressText } from "@/lib/i18n";
+import { currentScoutJob } from "@/lib/scout-job";
 import { AGENTS } from "@/lib/agents/roster";
 import { latestVerdicts } from "@/lib/agents/team";
 import type { Db } from "@/lib/db/client";
@@ -121,7 +124,14 @@ async function AgentWork({
   view: Language;
   t: Strings;
 }) {
-  if (id === "scout") return <ScoutWork db={db} ui={ui} view={view} t={t} />;
+  if (id === "scout") {
+    return (
+      <>
+        <ScoutProgress initial={currentScoutJob()} text={scoutProgressText(t)} />
+        <ScoutWork db={db} ui={ui} view={view} t={t} />
+      </>
+    );
+  }
   if (id === "storyteller") return <ScenarioList rows={[...map.main, ...map.second]} ui={ui} t={t} />;
   if (id === "manager" || id === "coach") {
     return (
@@ -144,6 +154,7 @@ async function ScoutWork({ db, ui, view, t }: { db: Db; ui: UiLanguage; view: La
   // A new idea can build on a past one that did well once live; show which, in this language.
   const titleByPair = new Map(rows.map((idea) => [idea.pairId, idea.title]));
   const proposed = rows.filter((idea) => idea.status === "proposed");
+  const approved = rows.filter((idea) => idea.status === "approved");
   const rejected = rows.filter((idea) => idea.status === "rejected");
   const verdicts = await latestVerdicts(db, proposed.map((idea) => idea.pairId));
   return (
@@ -166,6 +177,20 @@ async function ScoutWork({ db, ui, view, t }: { db: Db; ui: UiLanguage; view: La
             />
           ))}
         </div>
+      )}
+
+      {approved.length > 0 && (
+        <section className="mt-10">
+          <h3 className="font-display text-xl font-semibold">
+            {t.approvedIdeas} <span className="label">({approved.length})</span>
+          </h3>
+          <p className="mt-1 text-sm text-ink-soft">{t.approvedIdeasHint}</p>
+          <div className="mt-2">
+            {approved.map((idea) => (
+              <IdeaRow key={idea.id} href={`/${ui}/ideas/${idea.id}`} title={idea.title} status={t.inProgress} />
+            ))}
+          </div>
+        </section>
       )}
 
       {rejected.length > 0 && (

@@ -112,13 +112,23 @@ async function adaptIdeasOrFail(writer: WritingModel, context: WritingContext, s
   return adapted;
 }
 
-export async function generateIdeas({ db, writer, searcher }: StudioDeps, language: Language, focus: string) {
+/**
+ * Finds a batch of ideas. `stopIfAsked` is called between the slow steps; when you stop the search
+ * it throws, so nothing is saved. Everything is saved at the very end, in one go.
+ */
+export async function generateIdeas(
+  { db, writer, searcher }: StudioDeps,
+  language: Language,
+  focus: string,
+  stopIfAsked: () => void = () => {},
+) {
   const profile = await requireProfile(db);
   if (!profile.languages.includes(language)) throw new StudioError("Choose one of your content languages first.");
   const context = await writingContext(db, language);
   // What you asked for can hold links (a post, an article, a page); the scout reads them first.
   const { request, links } = splitLinks(focus);
   const shared = links.length && searcher.read ? await searcher.read(links) : { pages: [], failed: links };
+  stopIfAsked();
   if (links.length > 0 && shared.pages.length === 0 && !request) {
     throw new StudioError(
       "The link couldn't be opened. Instagram and LinkedIn often hide posts from outside readers, so paste the post's text instead, or add a few words about what you want.",
@@ -130,6 +140,7 @@ export async function generateIdeas({ db, writer, searcher }: StudioDeps, langua
     throw new StudioError("Add at least one search topic to the Brand Kit.");
   }
   const found = queries.length ? await searcher.search(queries) : [];
+  stopIfAsked();
   const sharedUrls = new Set(shared.pages.map((page) => page.url));
   const results = [...shared.pages, ...found.filter((result) => !sharedUrls.has(result.url))];
   if (results.length === 0) {
@@ -156,13 +167,16 @@ export async function generateIdeas({ db, writer, searcher }: StudioDeps, langua
   };
   const first = await writer.generateIdeas(context, brief);
   if (first.length === 0) throw new StudioError("No ideas came back. Please try again.");
+  stopIfAsked();
   const { drafts, verdicts } = await checkIdeas({ db, writer }, context, brief, first.slice(0, IDEA_BATCH_SIZE));
+  stopIfAsked();
 
   // A source is kept only if the search really returned it, so a made-up link can't appear as evidence.
   const known = new Map(results.map((result) => [result.url, result]));
   const batch = drafts.slice(0, IDEA_BATCH_SIZE);
   const second = otherLanguage(language, profile.languages);
   const adapted = second ? await adaptIdeasOrFail(writer, await writingContext(db, second), batch.map(ideaText)) : [];
+  stopIfAsked();
 
   // With two languages both are saved together, so an idea can never exist in only one of them.
   const rows = batch.flatMap((draft, index) => {

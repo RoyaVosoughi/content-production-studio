@@ -19,6 +19,7 @@ import { VIEW_COOKIE } from "@/lib/view";
 import { cookies } from "next/headers";
 import { isPlatform } from "@/lib/platforms";
 import * as results from "@/lib/results";
+import { startScoutJob } from "@/lib/scout-job";
 import * as studio from "@/lib/studio";
 
 export type ActionState = { error?: string } | null;
@@ -88,15 +89,27 @@ export async function saveResultsAction(_: ActionState, form: FormData) {
   });
 }
 
-export async function generateIdeasAction(_: ActionState, form: FormData) {
-  const state = await perform(async () => {
-    const focus = text(form, "focus");
+/**
+ * Starts the idea scout in the background and goes straight to its card, where you can watch it,
+ * stop it, or leave for any other page. "mode=topic" needs a topic; "mode=auto" searches your Brand Kit's topics.
+ */
+export async function generateIdeasAction(_: ActionState, form: FormData): Promise<ActionState> {
+  try {
+    const focus = text(form, "mode") === "auto" ? "" : text(form, "focus");
+    if (text(form, "mode") === "topic" && !focus) throw new StudioError("Write a topic or paste a link first.");
     if (focus.length > MAX_REQUEST_LENGTH) throw new StudioError("Please shorten your request.");
-    await studio.generateIdeas(await studio.defaultDeps(), languageFrom(form), focus);
-  });
-  // From the box at the top of the studio, go straight to the new ideas in the scout's card.
-  if (!state && form.has("ui")) redirect(`/${uiFrom(form)}/map?agent=scout#agent-card`);
-  return state;
+    const language = languageFrom(form);
+    const job = startScoutJob(
+      language,
+      async (stopIfAsked) => (await studio.generateIdeas(await studio.defaultDeps(), language, focus, stopIfAsked)).length,
+      messageFor,
+      () => void studio.learnInBackground(),
+    );
+    if (!job) throw new StudioError("The Idea Scout is still finishing its last search. Try again in a minute.");
+  } catch (error) {
+    return { error: messageFor(error) };
+  }
+  redirect(`/${uiFrom(form)}/map?agent=scout#agent-card`);
 }
 
 export async function refineIdeaAction(_: ActionState, form: FormData) {
@@ -375,7 +388,7 @@ export async function makeVideoAction(_: ActionState, form: FormData) {
 }
 
 export async function saveBrandKitAction(_: ActionState, form: FormData) {
-  return perform(async () => {
+  const state = await perform(async () => {
     await studio.saveBrandKit(await getDb(), languageFrom(form), {
       positioning: text(form, "positioning"),
       audience: text(form, "audience"),
@@ -386,6 +399,9 @@ export async function saveBrandKitAction(_: ActionState, form: FormData) {
       searchTopics: lines(form, "searchTopics"),
     });
   });
+  // The form is rebuilt from the saved kit, so the "saved" note and the next step travel in the address.
+  if (!state && form.has("ui")) redirect(`/${uiFrom(form)}/brand?saved=1`);
+  return state;
 }
 
 export type BrandFileState = { error?: string; proposal?: BrandProposal; fileName?: string } | null;

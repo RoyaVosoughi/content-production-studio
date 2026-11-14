@@ -44,7 +44,9 @@ export function ActionForm({
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (pending) return;
-    const data = new FormData(event.currentTarget);
+    // The button that was pressed comes along, so a form with two buttons knows which one it was.
+    const submitter = (event.nativeEvent as SubmitEvent).submitter;
+    const data = new FormData(event.currentTarget, submitter instanceof HTMLButtonElement && submitter.name ? submitter : undefined);
     startTransition(() => formAction(data));
   }
 
@@ -67,15 +69,20 @@ export function SubmitButton({
   pendingLabel,
   className = "btn-quiet",
   disabled,
+  name,
+  value,
 }: {
   children: ReactNode;
   pendingLabel: string;
   className?: string;
   disabled?: boolean;
+  /** Sent with the form when this button is the one pressed. */
+  name?: string;
+  value?: string;
 }) {
   const pending = useContext(PendingContext);
   return (
-    <button type="submit" disabled={pending || disabled} className={`btn ${className}`}>
+    <button type="submit" name={name} value={value} disabled={pending || disabled} className={`btn ${className}`}>
       <span className={pending ? "pending-pulse" : undefined} aria-live="polite">
         {pending ? pendingLabel : children}
       </span>
