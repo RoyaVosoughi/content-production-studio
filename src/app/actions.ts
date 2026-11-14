@@ -300,6 +300,27 @@ export async function removePhotoAction(_: ActionState, form: FormData) {
   });
 }
 
+/** Saves the brand image of a LinkedIn post or an article. A photo, when chosen, goes behind the cover. */
+export async function saveImageAction(_: ActionState, form: FormData) {
+  return perform(async () => {
+    let image: Record<string, unknown>;
+    try {
+      image = JSON.parse(text(form, "image"));
+    } catch {
+      throw new StudioError("The image couldn't be read. Reload and try again.");
+    }
+    const file = form.get("photo");
+    if (file instanceof File && file.size > 0) image.photo = await savePhoto(file);
+    await content.setPieceImage(await getDb(), text(form, "pieceId"), versionFrom(form), image);
+  });
+}
+
+export async function removeImageAction(_: ActionState, form: FormData) {
+  return perform(async () => {
+    await content.setPieceImage(await getDb(), text(form, "pieceId"), versionFrom(form), null);
+  });
+}
+
 export async function changePieceAction(_: ActionState, form: FormData) {
   return perform(async () => {
     await content.changePieceWithAi(await studio.defaultDeps(), text(form, "pieceId"), versionFrom(form), requestFrom(form));

@@ -15,6 +15,7 @@ import {
   rewritePieceFromScenario,
   savePieceEdit,
   setPiecePhoto,
+  setPieceImage,
   type PublishDeps,
 } from "@/lib/content";
 import { StudioError } from "@/lib/errors";
@@ -474,6 +475,60 @@ describe("Instagram", () => {
   });
 });
 
+describe("post images", () => {
+  const IMAGE = { kind: "quote", size: "square", heading: "Bake hot.", text: "", items: [] };
+
+  it("adds, changes and removes a LinkedIn post's image as new versions, and sends it when posting", async () => {
+    await createPieces(deps, ideaId, ["linkedin"], ["en"]);
+    const [piece] = await getPieces(db, ideaId);
+    await setPieceImage(db, piece.id, 1, { ...IMAGE, heading: "  Bake hot.  ", items: ["dropped"] });
+    let [current] = await getPieces(db, ideaId);
+    expect(current.current.version).toBe(2);
+    expect(current.current.content.image).toEqual(IMAGE);
+    await expect(setPieceImage(db, piece.id, 2, { ...IMAGE, heading: "" })).rejects.toThrow("needs the quote");
+
+    // Editing the text keeps the image.
+    await savePieceEdit(db, piece.id, 2, { body: "New text" });
+    [current] = await getPieces(db, ideaId);
+    expect(current.current.content).toMatchObject({ body: "New text", image: IMAGE });
+
+    const postImage = vi.fn<NonNullable<PublishDeps["postImage"]>>(async () => Buffer.from("jpeg"));
+    publishers.linkedin.publish.mockImplementationOnce(async ({ image }) => {
+      expect(await image()).toEqual({ jpeg: Buffer.from("jpeg"), alt: "Bake hot.", width: 1200, height: 1200 });
+      return { externalId: "urn", url: null };
+    });
+    await approveAndPublish({ ...publishDeps(), postImage }, piece.id, 3);
+    expect(postImage).toHaveBeenCalledWith(IMAGE, "en", expect.objectContaining({ label: expect.any(String) }));
+    [current] = await getPieces(db, ideaId);
+    expect(current.publication?.status).toBe("posted");
+  });
+
+  it("removes an image, refuses one on other platforms, and marks a failed drawing as not posted", async () => {
+    await createPieces(deps, ideaId, ["website", "telegram"], ["en"]);
+    const pieces = await getPieces(db, ideaId);
+    const article = pieces.find((piece) => piece.platform === "website")!;
+    const telegram = pieces.find((piece) => piece.platform === "telegram")!;
+    await expect(setPieceImage(db, telegram.id, 1, IMAGE)).rejects.toThrow("Only LinkedIn posts and website articles");
+
+    await setPieceImage(db, article.id, 1, IMAGE);
+    await setPieceImage(db, article.id, 2, null);
+    let current = (await getPieces(db, ideaId)).find((piece) => piece.id === article.id)!;
+    expect(current.current.content.image).toBeUndefined();
+
+    await setPieceImage(db, article.id, 3, IMAGE);
+    publishers.website.publish.mockImplementationOnce(async ({ image }) => {
+      await image();
+      return { externalId: "x", url: null };
+    });
+    const postImage = vi.fn(async () => {
+      throw new StudioError("The studio needs Google Chrome to make images.");
+    });
+    await approveAndPublish({ ...publishDeps(), postImage }, article.id, 4);
+    current = (await getPieces(db, ideaId)).find((piece) => piece.id === article.id)!;
+    expect(current.publication).toMatchObject({ status: "failed", error: expect.stringContaining("Google Chrome") });
+  });
+});
+
 describe("platform connectors", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
   const json = (status: number, body: unknown, headers?: Record<string, string>) =>
@@ -557,6 +612,35 @@ describe("platform connectors", () => {
       expect(JSON.parse(options.body)).toMatchObject({ author: "urn:li:person:abc", commentary: "سلام", visibility: "PUBLIC", lifecycleState: "PUBLISHED" });
     });
 
+    it("uploads the image first and attaches it to the post", async () => {
+      const image = async () => ({ jpeg: Buffer.from("jpeg"), alt: "Bake hot.", width: 1200, height: 1200 });
+      fetchMock
+        .mockResolvedValueOnce(json(200, { sub: "abc" }))
+        .mockResolvedValueOnce(json(200, { value: { uploadUrl: "https://upload.linkedin.test/1", image: "urn:li:image:7" } }))
+        .mockResolvedValueOnce(new Response(null, { status: 201 }))
+        .mockResolvedValueOnce(json(201, {}, { "x-restli-id": "urn:li:share:9" }));
+      await linkedinPublisher.publish({ ...input, image });
+      const [start, startOptions] = fetchMock.mock.calls[1];
+      expect(start).toBe("https://api.linkedin.com/rest/images?action=initializeUpload");
+      expect(JSON.parse(startOptions.body)).toEqual({ initializeUploadRequest: { owner: "urn:li:person:abc" } });
+      const [upload, uploadOptions] = fetchMock.mock.calls[2];
+      expect(upload).toBe("https://upload.linkedin.test/1");
+      expect(uploadOptions.method).toBe("PUT");
+      expect(JSON.parse(fetchMock.mock.calls[3][1].body).content).toEqual({ media: { id: "urn:li:image:7", altText: "Bake hot." } });
+    });
+
+    it("posts nothing when the image upload fails", async () => {
+      const image = async () => ({ jpeg: Buffer.from("jpeg"), alt: "A", width: 1200, height: 1200 });
+      fetchMock.mockResolvedValueOnce(json(200, { sub: "abc" })).mockResolvedValueOnce(json(403, {}));
+      await expect(linkedinPublisher.publish({ ...input, image })).rejects.toBeInstanceOf(PublishRejected);
+      fetchMock
+        .mockResolvedValueOnce(json(200, { sub: "abc" }))
+        .mockResolvedValueOnce(json(200, { value: { uploadUrl: "https://upload.linkedin.test/1", image: "urn:li:image:7" } }))
+        .mockRejectedValueOnce(new Error("timeout"));
+      await expect(linkedinPublisher.publish({ ...input, image })).rejects.toThrow("nothing was posted");
+      expect(fetchMock.mock.calls.map(([url]) => url)).not.toContain("https://api.linkedin.com/rest/posts");
+    });
+
     it("explains an expired token, and never reports a server failure as a safe retry", async () => {
       fetchMock.mockResolvedValueOnce(json(401, {}));
       await expect(linkedinPublisher.publish(input)).rejects.toThrow("60 days");
@@ -581,6 +665,46 @@ describe("platform connectors", () => {
       const row = JSON.parse(options.body);
       expect(row).toMatchObject({ locale: "fa", slug: "a-b", title: "T", excerpt: "E", body_md: "سلام", tags: ["x"], status: "published" });
       expect(row.published_at).toBeTruthy();
+    });
+
+    it("puts the image in public storage and saves its address with the article", async () => {
+      const image = async () => ({ jpeg: Buffer.from("jpeg"), alt: "A", width: 1200, height: 630 });
+      fetchMock.mockImplementation(async (url: string) => {
+        if (url.includes("/storage/v1/bucket")) return json(200, {});
+        if (url.includes("/storage/v1/object/")) return json(200, { Key: "ok" });
+        if (url.includes("?locale=")) return json(200, []);
+        return json(201, [{ id: "row1" }]);
+      });
+      await websitePublisher.publish({ ...input, image });
+      const urls = fetchMock.mock.calls.map(([url]) => String(url));
+      expect(urls).toContain("https://x.supabase.co/storage/v1/object/studio-media/articles/piece-v1.jpg");
+      const insert = fetchMock.mock.calls.find(([url, options]) => url === "https://x.supabase.co/rest/v1/blog_posts" && options.method === "POST")!;
+      expect(JSON.parse(insert[1].body).cover_image).toBe("https://x.supabase.co/storage/v1/object/public/studio-media/articles/piece-v1.jpg");
+
+      // A table without the column gets a clear "not posted".
+      fetchMock.mockImplementation(async (url: string) => {
+        if (url.includes("/storage/v1/")) return json(200, {});
+        if (url.includes("?locale=")) return json(200, []);
+        return json(400, { code: "PGRST204", message: "Could not find the 'cover_image' column of 'blog_posts'" });
+      });
+      await expect(websitePublisher.publish({ ...input, image })).rejects.toThrow("no cover_image column");
+    });
+
+    it("sends the image itself to a webhook", async () => {
+      vi.stubEnv("WEBSITE_WEBHOOK_URL", "https://hook.example/articles");
+      vi.stubEnv("SUPABASE_URL", "");
+      const image = async () => ({ jpeg: Buffer.from("jpeg"), alt: "A", width: 1200, height: 630 });
+      fetchMock.mockResolvedValueOnce(json(200, {}));
+      await websitePublisher.publish({ ...input, image });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(fetchMock.mock.calls[0][1].body).image).toEqual({
+        url: null,
+        alt: "A",
+        width: 1200,
+        height: 630,
+        content_type: "image/jpeg",
+        data_base64: Buffer.from("jpeg").toString("base64"),
+      });
     });
 
     it("sends an older service_role key in both headers", async () => {

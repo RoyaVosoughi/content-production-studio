@@ -43,6 +43,7 @@ import { hasPlaceholder } from "./scenario";
 import { getScenario, getSibling, requireIdea, writingContext, type StudioDeps } from "./studio";
 import type { WritingContext } from "./ai/types";
 import type { ScenarioContent } from "./db/schema";
+import { cleanImage, IMAGE_SIZES, imageAlt, imageProblem, type PostImage } from "./post-image";
 
 const STALE_PIECE = "This post changed since you opened it. Reload and review the latest version.";
 /** A send that never reported back, because the app stopped mid-post, is treated as unknown after this long. */
@@ -53,11 +54,13 @@ export type PublishDeps = {
   publishers: Record<Platform, Publisher>;
   /** Draws the Instagram slides as JPEG images. */
   slideImages: (content: PieceContent, language: Language, brand: SlideBrand) => Promise<Buffer[]>;
+  /** Draws a LinkedIn post's or an article's brand image as a JPEG. */
+  postImage?: (image: PostImage, language: Language, brand: SlideBrand) => Promise<Buffer>;
 };
 
 export async function defaultPublishDeps(): Promise<PublishDeps> {
-  const { renderSlides } = await import("./render");
-  return { db: await getDb(), publishers: PUBLISHERS, slideImages: renderSlides };
+  const { renderSlides, renderPostImage } = await import("./render");
+  return { db: await getDb(), publishers: PUBLISHERS, slideImages: renderSlides, postImage: renderPostImage };
 }
 
 function isScenarioApproved(scenario: Awaited<ReturnType<typeof getScenario>>) {
@@ -374,6 +377,30 @@ export async function setPiecePhoto(db: Db, pieceId: string, basedOn: number, ph
   await addVersion(db, pieceId, basedOn, photo ? { ...rest, photo } : rest, "edit", old.scenarioVersion);
 }
 
+/** The brand image that goes out with this post, when its platform sends one. */
+export function imageOf(platform: Platform, content: PieceContent): PostImage | null {
+  return (platform === "linkedin" || platform === "website") && content.image ? content.image : null;
+}
+
+/** Adds, changes or removes a LinkedIn post's or an article's brand image, as a new version. */
+export async function setPieceImage(db: Db, pieceId: string, basedOn: number, value: unknown) {
+  const piece = await requirePiece(db, pieceId);
+  if (piece.platform !== "linkedin" && piece.platform !== "website") {
+    throw new StudioError("Only LinkedIn posts and website articles have a brand image.");
+  }
+  const old = await pieceVersion(db, pieceId, basedOn);
+  const { image: _previous, ...rest } = old.content;
+  if (value === null) {
+    await addVersion(db, pieceId, basedOn, rest, "edit", old.scenarioVersion);
+    return;
+  }
+  const image = cleanImage(value);
+  if (!image) throw new StudioError("The image couldn't be read. Reload and try again.");
+  const problem = imageProblem(image);
+  if (problem) throw new StudioError(problem);
+  await addVersion(db, pieceId, basedOn, { ...rest, image }, "edit", old.scenarioVersion);
+}
+
 export async function restorePieceVersion(db: Db, pieceId: string, basedOn: number, version: number) {
   const old = await pieceVersion(db, pieceId, version);
   await addVersion(db, pieceId, basedOn, old.content, "restore", old.scenarioVersion);
@@ -430,7 +457,7 @@ export async function checkPostable({ db, publishers }: Pick<PublishDeps, "db" |
 }
 
 export async function approveAndPublish(
-  { db, publishers, slideImages }: PublishDeps,
+  { db, publishers, slideImages, postImage }: PublishDeps,
   pieceId: string,
   version: number,
   { checkedNotPosted = false }: { checkedNotPosted?: boolean } = {},
@@ -469,6 +496,18 @@ export async function approveAndPublish(
       content,
       key: `${pieceId}-v${version}`,
       images: () => slideImages(content, language, slideBrand(profile)),
+      image: async () => {
+        const image = imageOf(piece.platform, content);
+        if (!image) return null;
+        const draw = postImage ?? (await import("./render")).renderPostImage;
+        const { width, height } = IMAGE_SIZES[image.size];
+        try {
+          return { jpeg: await draw(image, language, slideBrand(profile)), alt: imageAlt(image), width, height };
+        } catch (error) {
+          // Drawing happens before anything is sent, so the post certainly didn't go out.
+          throw new PublishRejected(error instanceof StudioError ? error.message : "The post's image couldn't be made, so nothing was posted.");
+        }
+      },
       profile,
     });
     await finish({ status: "posted", externalId, url, postedAt: new Date(), error: null });

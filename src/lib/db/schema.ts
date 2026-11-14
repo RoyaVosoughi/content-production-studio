@@ -1,5 +1,6 @@
 import { bigint, boolean, integer, jsonb, pgTable, primaryKey, real, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
 import type { AnimationScene } from "../video/animation";
+import type { PostImage } from "../post-image";
 
 export const brandKits = pgTable("brand_kits", {
   language: text("language").primaryKey(),
@@ -138,6 +139,8 @@ export type PieceContent = {
   slides?: Slide[];
   /** A photo uploaded for the Instagram cover, by its file name in the media folder. */
   photo?: string;
+  /** LinkedIn and website only: the brand image that goes out with the post. */
+  image?: PostImage;
   /** Video only: the script and shot list to film from. */
   script?: ScriptPart[];
   /** Video only: the id of the uploaded clip. */
