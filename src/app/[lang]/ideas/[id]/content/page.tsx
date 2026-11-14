@@ -5,6 +5,7 @@ import { ActionForm, SubmitButton } from "@/components/action-form";
 import { IdeaMap } from "@/components/idea-map";
 import { ManagerNote } from "@/components/manager-note";
 import { PieceEditor } from "@/components/piece-editor";
+import { PostTabs, type PostTab } from "@/components/post-tabs";
 import { RemovePiece } from "@/components/remove-piece";
 import { latestVerdicts } from "@/lib/agents/team";
 import { VideoEditor, type EditorVideo } from "@/components/video-editor";
@@ -106,28 +107,9 @@ export default async function ContentPage({ params }: { params: Promise<{ lang: 
   );
 
   const steps = await studioProgress(db, lang, view);
-  return (
-    <>
-      <Stepper steps={steps} here="posts" t={t} />
-      <Link href={`/${lang}/ideas/${id}`} className="text-sm font-medium text-cobalt underline-offset-4 hover:underline">
-        {t.backToScenario}
-      </Link>
-      <IdeaMap db={db} ui={lang} t={t} languages={contentLanguages} view={view} idea={idea} sibling={sibling} here="content" />
-
-      <h1 className="mt-6 font-display text-3xl font-semibold">{t.contentTitle}</h1>
-      <p className="mt-1 font-medium text-ink-soft" lang={language} dir={textDirection(language)}>
-        {idea.title}
-      </p>
-      <p className="mt-3 max-w-xl text-ink-soft">{t.contentIntro}</p>
-
-      {!ready && pieces.length === 0 ? (
-        <p role="status" className="mt-6 rounded-lg border-s-4 border-amber bg-paper p-4 text-sm">
-          {t.contentNotReady}
-        </p>
-      ) : (
-        ready &&
-        available.length > 0 && (
-          <ActionForm action={createPiecesAction} className="mt-6 rounded-xl bg-paper p-5 md:p-6">
+  const canAdd = ready && available.length > 0;
+  const addForm = (
+          <ActionForm action={createPiecesAction} className="rounded-xl bg-paper p-5 md:p-6">
             <input type="hidden" name="ideaId" value={id} />
             <input type="hidden" name="ui" value={lang} />
             <fieldset>
@@ -240,11 +222,45 @@ export default async function ContentPage({ params }: { params: Promise<{ lang: 
               </SubmitButton>
             </div>
           </ActionForm>
-        )
-      )}
+  );
+  return (
+    <>
+      <Stepper steps={steps} here="posts" t={t} />
+      <Link href={`/${lang}/ideas/${id}`} className="text-sm font-medium text-cobalt underline-offset-4 hover:underline">
+        {t.backToScenario}
+      </Link>
+      <details className="mt-4">
+        <summary className="cursor-pointer text-sm font-medium text-ink-soft hover:text-cobalt">{t.showIdeaMap}</summary>
+        <IdeaMap db={db} ui={lang} t={t} languages={contentLanguages} view={view} idea={idea} sibling={sibling} here="content" />
+      </details>
 
-      <div className="mt-6 space-y-5">
-        {editors.map(({ piece, platform, other, video }) => {
+      <h1 className="mt-6 font-display text-3xl font-semibold">{t.contentTitle}</h1>
+      <p className="mt-1 font-medium text-ink-soft" lang={language} dir={textDirection(language)}>
+        {idea.title}
+      </p>
+      <p className="mt-3 max-w-xl text-ink-soft">{t.contentIntro}</p>
+
+      {!ready && pieces.length === 0 && (
+        <p role="status" className="mt-6 rounded-lg border-s-4 border-amber bg-paper p-4 text-sm">
+          {t.contentNotReady}
+        </p>
+      )}
+      {canAdd && editors.length === 0 && addForm}
+
+      {editors.length > 0 && (
+        <PostTabs
+          label={t.contentTitle}
+          tabs={[
+            ...editors.map(({ piece, platform }) => {
+              const state = publishState(piece.publication);
+              const tone: PostTab["tone"] =
+                state === "posted" ? "posted" : schedules.get(piece.id)?.status === "waiting" ? "scheduled" : "draft";
+              return { key: platform, label: platformLabel(platform, lang), tone };
+            }),
+            ...(canAdd ? [{ key: "add", label: t.addChannels, tone: "add" as const }] : []),
+          ]}
+          panels={[
+            ...editors.map(({ piece, platform, other, video }) => {
           const editorPiece = {
             id: piece.id,
             platform,
@@ -269,7 +285,7 @@ export default async function ContentPage({ params }: { params: Promise<{ lang: 
             <ManagerNote verdict={verdict} language={lang} t={t} />
           );
           return (
-            <div key={`${piece.id}-${piece.currentVersion}`} id={`post-${platform}`} className="scroll-mt-24 space-y-2">
+            <div key={`${piece.id}-${piece.currentVersion}`} className="space-y-2">
               {note}
               {video ? (
                 <VideoEditor piece={editorPiece} video={video} language={lang} t={t} />
@@ -293,8 +309,11 @@ export default async function ContentPage({ params }: { params: Promise<{ lang: 
               />
             </div>
           );
-        })}
-      </div>
+            }),
+            ...(canAdd ? [addForm] : []),
+          ]}
+        />
+      )}
     </>
   );
 }
