@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { saveResultsAction } from "@/app/actions";
 import { ActionForm, SubmitButton } from "@/components/action-form";
 import { formatNumber } from "@/components/team-parts";
@@ -30,6 +31,9 @@ export default async function ResultsPage({ params }: { params: Promise<{ lang: 
     <>
       <h1 className="font-display text-4xl font-semibold leading-tight md:text-5xl">{t.resultsTitle}</h1>
       <p className="mt-3 max-w-2xl text-ink-soft">{t.resultsIntro}</p>
+      <Link href={`/${lang}/results/report`} className="btn btn-quiet mt-4" data-report-link>
+        {t.report.link}
+      </Link>
 
       {rows.length === 0 ? (
         <p className="mt-8 rounded-xl bg-paper p-5">{t.resultsNoPosts}</p>
