@@ -1,14 +1,11 @@
 import Link from "next/link";
 import { learnNowAction, setManagerAction } from "@/app/actions";
 import { ActionForm, SubmitButton } from "@/components/action-form";
-import { BrandSetup } from "@/components/brand-setup";
-import { InstructionsForm } from "@/components/instructions-form";
 import { formatNumber, Stat, type AgentStats } from "@/components/team-parts";
 import { AGENTS, type AgentId } from "@/lib/agents/roster";
-import { GENERAL, getInstructions, LEARN_AFTER, teamOverview } from "@/lib/agents/team";
+import { LEARN_AFTER, teamOverview } from "@/lib/agents/team";
 import type { Strings } from "@/lib/i18n";
-import { languageName, textDirection, type UiLanguage as Language } from "@/lib/language";
-import { getBrandKit } from "@/lib/studio";
+import type { UiLanguage as Language } from "@/lib/language";
 import { readyPage } from "@/lib/view";
 
 export const dynamic = "force-dynamic";
@@ -29,13 +26,8 @@ const ORDER: AgentId[] = [
 
 export default async function TeamPage({ params }: { params: Promise<{ lang: string }> }) {
   const { lang: param } = await params;
-  const { ui: lang, t, db, languages } = await readyPage(param);
-  const [overview, general, brandKits, ...own] = await Promise.all([
-    teamOverview(db),
-    getInstructions(db, GENERAL),
-    Promise.all(languages.map(async (code) => ({ code, kit: await getBrandKit(db, code) }))),
-    ...ORDER.map((id) => getInstructions(db, id)),
-  ]);
+  const { ui: lang, t, db } = await readyPage(param);
+  const overview = await teamOverview(db);
   const byId = new Map(overview.agents.map((agent) => [agent.id, agent]));
   const number = formatNumber(lang);
   const { settings } = overview;
@@ -45,41 +37,15 @@ export default async function TeamPage({ params }: { params: Promise<{ lang: str
       <h1 className="font-display text-4xl font-semibold leading-tight md:text-5xl">{t.teamTitle}</h1>
       <p className="mt-3 max-w-xl text-ink-soft">{t.teamIntro}</p>
 
-      {/* The general instructions: who you are and how you work. Every agent reads them before its own. */}
-      <section className="surface-raised mt-8 rounded-xl bg-paper p-6 md:p-8">
-        <h2 className="font-display text-3xl font-semibold">{t.generalTitle}</h2>
-        <p className="mt-2 mb-5 max-w-2xl text-ink-soft">{t.generalIntro}</p>
-        <InstructionsForm
-          owner={GENERAL}
-          instructions={general}
-          languages={languages}
-          ui={lang}
-          t={t}
-          placeholder={t.generalPlaceholder}
-          rows={10}
-        />
-        <div className="mt-6 border-t border-mist pt-5">
-          <BrandSetup
-            kits={brandKits.map(({ code, kit }) => ({
-              code,
-              label: languageName(code, lang),
-              dir: textDirection(code),
-              kit,
-              isDraft: kit.isDraft,
-            }))}
-            aboutEmpty={!general.both.trim()}
-            t={t}
-          />
-        </div>
-        <p className="mt-5 flex flex-wrap gap-3 border-t border-mist pt-4 text-sm">
-          <Link href={`/${lang}/setup`} className="btn btn-quiet">
-            {t.navSetup}
-          </Link>
-        </p>
-      </section>
+      <p className="mt-4 max-w-2xl rounded-lg border-s-4 border-cobalt bg-paper p-3 text-sm">
+        {t.teamSkillsNote}{" "}
+        <Link href={`/${lang}/brand#team-rules`} className="text-cobalt underline underline-offset-2">
+          {t.teamRulesLink}
+        </Link>
+      </p>
 
       <section className="mt-6 grid gap-4 md:grid-cols-2">
-        {ORDER.map((id, index) => {
+        {ORDER.map((id) => {
           const agent = byId.get(id)!;
           return (
             <article key={id} className="flex flex-col rounded-xl bg-paper p-5 md:p-6">
@@ -131,19 +97,6 @@ export default async function TeamPage({ params }: { params: Promise<{ lang: str
                 </div>
               )}
 
-              <div className="mt-5 border-t border-mist pt-4">
-                <h3 className="mb-3 text-sm font-semibold">{t.instructionsTitle}</h3>
-                <InstructionsForm
-                  owner={id}
-                  instructions={own[index]}
-                  languages={languages}
-                  ui={lang}
-                  t={t}
-                  placeholder={AGENTS[id].example[lang]}
-                  rows={4}
-                />
-              </div>
-
               <div className="mt-auto">
                 <SpaceLink agent={agent} language={lang} t={t} />
               </div>
@@ -160,7 +113,7 @@ function SpaceLink({ agent, language, t }: { agent: AgentStats; language: Langua
   return (
     <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-mist pt-4">
       <span className="text-sm text-ink-soft">
-        {agent.hasInstructions ? t.instructionsSet : t.instructionsNone}
+        {agent.customSkill ? t.skillCustom : t.skillDefault}
         {agent.lessons.length > 0 && ` · ${t.lessonsTitle}: ${formatNumber(language)(agent.lessons.length)}`}
       </span>
       <Link href={`/${language}/team/${agent.id}`} className="btn btn-quiet">

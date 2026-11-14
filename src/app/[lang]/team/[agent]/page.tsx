@@ -1,20 +1,21 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { EditorSamples } from "@/components/editor-samples-list";
-import { InstructionsForm } from "@/components/instructions-form";
+import { SkillEditor } from "@/components/skill-editor";
 import { AgentNumbers, Lessons, RecentNotes } from "@/components/team-parts";
 import { AGENTS, isAgentId, LEARNING_AGENTS } from "@/lib/agents/roster";
-import { getInstructions, teamOverview } from "@/lib/agents/team";
+import { getSkill, SKILL_LENGTH } from "@/lib/agents/skills";
+import { teamOverview } from "@/lib/agents/team";
 import { readyPage } from "@/lib/view";
 
 export const dynamic = "force-dynamic";
 
-/** One agent's own space: your instructions for it, how it's doing, and what it has learned. */
+/** One agent's own space: its Skill, how it's doing, and what it has learned. */
 export default async function AgentSpacePage({ params }: { params: Promise<{ lang: string; agent: string }> }) {
   const { lang: param, agent: id } = await params;
-  const { ui: lang, t, db, languages } = await readyPage(param);
+  const { ui: lang, t, db, languages, view, profile: owner } = await readyPage(param);
   if (!isAgentId(id)) notFound();
-  const [overview, instructions] = await Promise.all([teamOverview(db), getInstructions(db, id)]);
+  const [overview, skill] = await Promise.all([teamOverview(db), getSkill(db, id)]);
   const agent = overview.agents.find((entry) => entry.id === id)!;
   const profile = AGENTS[id];
 
@@ -28,15 +29,19 @@ export default async function AgentSpacePage({ params }: { params: Promise<{ lan
       <p className="mt-2 max-w-xl text-sm text-ink-soft">{t.spaceIntro.replace("{name}", profile.name[lang])}</p>
 
       <section className="mt-8 rounded-xl bg-paper p-5 md:p-6">
-        <h2 className="font-display text-xl font-semibold">{t.instructionsTitle}</h2>
-        <p className="mt-1 mb-4 max-w-2xl text-sm text-ink-soft">{t.instructionsIntro}</p>
-        <InstructionsForm
-          owner={id}
-          instructions={instructions}
-          languages={languages}
+        <h2 className="font-display text-xl font-semibold">{t.skillTitle}</h2>
+        <p className="mt-1 mb-4 max-w-2xl text-sm text-ink-soft">{t.skillIntro}</p>
+        <SkillEditor
+          key={skill.updatedAt?.getTime() ?? (skill.custom ? "custom" : "default")}
+          agent={id}
+          saved={skill.text}
+          custom={skill.custom}
+          updatedAt={skill.updatedAt}
+          ownerName={owner.name}
+          language={view}
+          limit={SKILL_LENGTH}
           ui={lang}
           t={t}
-          placeholder={profile.example[lang]}
         />
       </section>
 

@@ -1,3 +1,4 @@
+import { allSkills } from "./agents/skills";
 import { and, desc, eq, ne, sql } from "drizzle-orm";
 import {
   describeEdit,
@@ -72,6 +73,7 @@ export async function writingContext(db: Db, language: Language): Promise<Writin
     brand: { positioning, audience, pillars, voiceGuide, avoid, samples, searchTopics },
     lessons: await lessonsFor(db, language),
     instructions: await instructionsFor(db, language),
+    skills: await allSkills(db),
   };
 }
 

@@ -429,7 +429,9 @@ describe("Instagram", () => {
     expect(prompt).toContain("Instagram carousel");
     expect(prompt).toContain("would look out of place pasted on another");
     await writer.writePiece(context, { platform: "telegram", scenario, sources: [] }).catch(() => undefined);
-    expect(generate.mock.calls[1][1]).toContain("insider note");
+    // Each channel's job is in its writer's Skill, in the system prompt.
+    expect(generate.mock.calls[1][0]).toContain("insider note");
+    expect(generate.mock.calls[0][0]).toContain("teaches one thing visually");
     expect(buildSystemPrompt(context)).not.toContain("Instagram carousel");
   });
 

@@ -17,6 +17,8 @@ import { platformLabel } from "@/lib/platforms";
 import { upcomingPosts } from "@/lib/schedule";
 import { scheduleLabel } from "@/lib/schedule-time";
 import { readyPage } from "@/lib/view";
+import { Stepper } from "@/components/stepper";
+import { studioProgress } from "@/lib/progress";
 
 export const dynamic = "force-dynamic";
 
@@ -48,7 +50,7 @@ export default async function StudioMapPage({
   const { lang: param } = await params;
   const { agent } = await searchParams;
   const { ui: lang, t, db, view, languages } = await readyPage(param);
-  const map = await loadMap(db, languages, view);
+  const [map, steps] = await Promise.all([loadMap(db, languages, view), studioProgress(db, lang, view)]);
   const available = ALL;
   const chosen: MapNodeId =
     agent && (available as string[]).includes(agent)
@@ -63,6 +65,7 @@ export default async function StudioMapPage({
 
   return (
     <>
+      <Stepper steps={steps} t={t} />
       <h1 className="font-display text-4xl font-semibold leading-tight md:text-5xl">{t.mapTitle}</h1>
       <p className="mt-3 text-ink-soft">
         <Link href={`/${lang}`} className="text-cobalt underline underline-offset-2">

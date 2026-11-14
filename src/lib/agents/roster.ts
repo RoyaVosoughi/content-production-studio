@@ -29,6 +29,9 @@ export const PASS_SCORE = 7;
  */
 export const INSTRUCTIONS_LENGTH = 3000;
 
+/** The longest a Skill may be. Every request carries the agent's Skill, so it stays short enough to be cheap. */
+export const SKILL_LENGTH = 8000;
+
 /** Agents whose work is checked by the manager and taught by the coach. The coach teaches the manager too. */
 export const LEARNING_AGENTS: AgentId[] = AGENT_IDS.filter((id) => id !== "coach");
 
@@ -40,8 +43,6 @@ type AgentProfile = {
   name: Record<UiLanguage, string>;
   /** What the agent does, for the Team page. */
   job: Record<UiLanguage, string>;
-  /** Who the agent is, opening its instructions. */
-  role: string;
   /** A sample instruction, shown in the empty box on the agent's page. */
   example: Record<UiLanguage, string>;
 };
@@ -53,7 +54,6 @@ export const AGENTS: Record<AgentId, AgentProfile> = {
       en: "Reads this week's news and finds fresh ideas that fit your brand.",
       fa: "اخبار این هفته را می‌خواند و ایده‌های تازه‌ای پیدا می‌کند که به برند شما می‌خورد.",
     },
-    role: "You are the idea scout on {OWNER}'s content team. Your job is finding fresh, timely content ideas that fit their brand and carry their point of view, and, when they publish in two languages, writing each idea again in the second language as a native writer would, never word for word.",
     example: {
       en: "Prefer ideas about AI tools for small businesses. Skip crypto news.",
       fa: "ایده‌های مربوط به ابزارهای هوش مصنوعی برای کسب‌وکارهای کوچک را ترجیح بده. اخبار کریپتو را کنار بگذار.",
@@ -65,7 +65,6 @@ export const AGENTS: Record<AgentId, AgentProfile> = {
       en: "Turns an approved idea into the core story every post is built from.",
       fa: "ایده‌ی تأییدشده را به داستان اصلی‌ای تبدیل می‌کند که همه‌ی پست‌ها از آن ساخته می‌شوند.",
     },
-    role: "You are the scenario writer on {OWNER}'s content team. Your job is turning an approved idea into a strong core story: the hook, the beats, their angle, an example and a call to action. When they publish in two languages, you also write the story again in the second language as a native writer would, never word for word, keeping their voice in that language.",
     example: {
       en: "Build every story around one real problem my clients have.",
       fa: "هر داستان را حول یک مشکل واقعی مشتری‌هایم بساز.",
@@ -77,7 +76,6 @@ export const AGENTS: Record<AgentId, AgentProfile> = {
       en: "Writes the short insider note for your Telegram channel.",
       fa: "یادداشت کوتاه و خودمانی کانال تلگرام را می‌نویسد.",
     },
-    role: "You are the Telegram writer on {OWNER}'s content team. Your only job is writing posts for their Telegram channel.",
     example: {
       en: "Start with a short personal line, like a note to a friend.",
       fa: "با یک جمله‌ی کوتاه و شخصی شروع کن، مثل پیامی به یک دوست.",
@@ -89,7 +87,6 @@ export const AGENTS: Record<AgentId, AgentProfile> = {
       en: "Writes the business case for business owners on LinkedIn.",
       fa: "نسخه‌ی کسب‌وکاری را برای صاحبان کسب‌وکار در لینکدین می‌نویسد.",
     },
-    role: "You are the LinkedIn writer on {OWNER}'s content team. Your only job is writing LinkedIn posts for business owners and decision-makers.",
     example: {
       en: "Open with a result or a number, never with a question.",
       fa: "با یک نتیجه یا عدد شروع کن، هیچ‌وقت با سؤال.",
@@ -101,7 +98,6 @@ export const AGENTS: Record<AgentId, AgentProfile> = {
       en: "Writes Instagram carousels that teach one thing, slide by slide.",
       fa: "کاروسل اینستاگرام را می‌نویسد که اسلاید به اسلاید یک چیز را آموزش می‌دهد.",
     },
-    role: "You are the carousel designer on {OWNER}'s content team. Your only job is writing Instagram carousels: the words on each slide and the caption.",
     example: {
       en: "Keep slide text very short: one idea, one sentence per slide.",
       fa: "متن اسلایدها را خیلی کوتاه نگه دار: هر اسلاید یک ایده و یک جمله.",
@@ -113,7 +109,6 @@ export const AGENTS: Record<AgentId, AgentProfile> = {
       en: "Writes the script and shot list you film for Reels, Shorts, YouTube and LinkedIn video.",
       fa: "متن و فهرست نماهایی را می‌نویسد که برای ریلز، شورتز، یوتیوب و ویدیوی لینکدین فیلم می‌گیرید.",
     },
-    role: "You are the video scriptwriter on {OWNER}'s content team. Your only job is writing the best possible script and shot list for a video they film themselves, plus its title and post text.",
     example: {
       en: "Keep Reels under 45 seconds. Show the result first, then how.",
       fa: "ریلز را زیر ۴۵ ثانیه نگه دار. اول نتیجه را نشان بده، بعد روش را.",
@@ -125,7 +120,6 @@ export const AGENTS: Record<AgentId, AgentProfile> = {
       en: "Writes the in-depth article for your website.",
       fa: "مقاله‌ی کامل و عمیق وب‌سایت را می‌نویسد.",
     },
-    role: "You are the blog writer on {OWNER}'s content team. Your only job is writing in-depth articles for their website.",
     example: {
       en: "Add a short summary at the top and a checklist at the end.",
       fa: "بالای مقاله یک خلاصه‌ی کوتاه و آخرش یک چک‌لیست بگذار.",
@@ -137,7 +131,6 @@ export const AGENTS: Record<AgentId, AgentProfile> = {
       en: "Reads your clip's transcript and plans the cuts, captions and motion.",
       fa: "متن کلیپ شما را می‌خواند و برش‌ها، زیرنویس و حرکت‌ها را برنامه‌ریزی می‌کند.",
     },
-    role: "You are the video editor on {OWNER}'s content team. Your only job is planning how to edit a clip they filmed.",
     example: {
       en: "Captions at the bottom, at most 4 words at a time. Never cut my laugh.",
       fa: "زیرنویس پایین تصویر و هر بار حداکثر ۴ کلمه. خنده‌ام را هیچ‌وقت حذف نکن.",
@@ -149,7 +142,6 @@ export const AGENTS: Record<AgentId, AgentProfile> = {
       en: "Checks every first draft before you see it, scores it and sends weak work back once.",
       fa: "هر پیش‌نویس اول را پیش از شما بررسی می‌کند، به آن نمره می‌دهد و کار ضعیف را یک بار برمی‌گرداند.",
     },
-    role: "You are the manager of {OWNER}'s content team. You inspect your writers' drafts before {OWNER} sees them. You are demanding but fair: you pass work that is ready for their, and you send back work with specific, fixable problems.",
     example: {
       en: "Be strict about the hook. Send back anything that sounds like generic AI writing.",
       fa: "درباره‌ی قلاب شروع سخت‌گیر باش. هر چیزی که شبیه متن کلیشه‌ای هوش مصنوعی است را برگردان.",
@@ -161,7 +153,6 @@ export const AGENTS: Record<AgentId, AgentProfile> = {
       en: "Studies your edits, rejections and the manager's notes, and turns them into lessons for each agent.",
       fa: "ویرایش‌ها، ردکردن‌ها و یادداشت‌های مدیر را بررسی می‌کند و برای هر عضو تیم درس می‌سازد.",
     },
-    role: "You are the learning coach of {OWNER}'s content team. You study the feedback on the team's work and turn it into short, practical lessons, so each agent does better next time.",
     example: {
       en: "Learn mostly from my edits, not from one-off requests.",
       fa: "بیشتر از ویرایش‌های من یاد بگیر، نه از درخواست‌های یک‌باره.",

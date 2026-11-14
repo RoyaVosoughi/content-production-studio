@@ -29,8 +29,11 @@ export function ScoutProgress({ initial, text }: { initial: Job | null; text: Sc
   const [job, setJob] = useState<Job | null>(initial);
   const [stopping, setStopping] = useState(false);
   const [dismissed, setDismissed] = useState<string | null>(null);
-  const [now, setNow] = useState(() => Date.now());
+  // The clock starts in the browser, so the server's page and the browser's first render match.
+  const [now, setNow] = useState<number | null>(null);
   const wasRunning = useRef(initial?.status === "running");
+
+  useEffect(() => setNow(Date.now()), []);
 
   useEffect(() => {
     if (job?.status !== "running") return;
@@ -62,15 +65,15 @@ export function ScoutProgress({ initial, text }: { initial: Job | null; text: Sc
   }
 
   if (!job || dismissed === job.id) return null;
-  if (job.status !== "running" && (!job.endedAt || now - job.endedAt > RECENT_MS)) return null;
+  if (job.status !== "running" && (now === null || !job.endedAt || now - job.endedAt > RECENT_MS)) return null;
 
   if (job.status === "running") {
-    const seconds = Math.max(0, Math.round((now - job.startedAt) / 1000));
-    const elapsed = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+    const seconds = now === null ? null : Math.max(0, Math.round((now - job.startedAt) / 1000));
+    const elapsed = seconds === null ? "" : ` (${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")})`;
     return (
       <div role="status" className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-lg border-s-4 border-cobalt bg-paper p-4 text-sm">
         <span className="pending-pulse">
-          {text.working} <span className="label">({elapsed})</span>
+          {text.working} <span className="label">{elapsed}</span>
         </span>
         <button type="button" onClick={stop} disabled={stopping} className="btn btn-quiet">
           {stopping ? text.stopping : text.stop}

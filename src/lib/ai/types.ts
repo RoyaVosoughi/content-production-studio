@@ -165,7 +165,10 @@ export type WritingContext = {
   owner?: { name: string; languages: Language[] };
   brand: BrandKitFields;
   lessons?: Partial<Record<AgentId, string[]>>;
+  /** Rules for the whole team, from the Brand page, given to every agent. */
   instructions?: Partial<Record<AgentId, string>>;
+  /** Each agent's Skill; custom when the author edited it. Missing agents use their default Skill file. */
+  skills?: Partial<Record<AgentId, { text: string; custom: boolean }>>;
 };
 
 export interface WritingModel {

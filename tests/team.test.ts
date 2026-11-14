@@ -2,8 +2,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { eq } from "drizzle-orm";
 import { buildSystemPrompt, createWriter, type GenerateJson } from "@/lib/ai/writer";
 import type { IdeaDraft, WritingModel } from "@/lib/ai/types";
-import { addLesson, getInstructions, getTeamSettings, INSTRUCTIONS_LENGTH, recordSignal, saveInstructions, LEARN_AFTER, learnFromFeedback, lessonsFor, pendingFeedback, setManagerEnabled, teamOverview } from "@/lib/agents/team";
+import { addLesson, GENERAL, getInstructions, getTeamSettings, recordSignal, saveInstructions, LEARN_AFTER, learnFromFeedback, lessonsFor, pendingFeedback, setManagerEnabled, teamOverview } from "@/lib/agents/team";
 import { EXAMPLE_BRAND as BRAND_SEED, studioDb } from "./fixtures/brand";
+import { defaultSkill, getSkill, resetSkill, saveSkill, SKILL_LENGTH } from "@/lib/agents/skills";
 import { createPieces, getPieces } from "@/lib/content";
 import { createLocalDb, type Db } from "@/lib/db/client";
 import { agentLessons, agentRuns, agentSignals } from "@/lib/db/schema";
@@ -280,49 +281,77 @@ describe("learning", () => {
   });
 });
 
-describe("each agent's own instructions", () => {
-  it("go only to that agent, with the shared part and the part for the language it's working in", async () => {
-    await saveInstructions(db, "editor", { both: "Never cut my laugh.", byLanguage: { en: "Captions in sentence case.", fa: "زیرنویس با فونت وزیر." } });
+describe("each agent's Skill", () => {
+  it("every agent works from its default Skill until you edit it", async () => {
+    const en = await writingContext(db, "en");
+    const scout = buildSystemPrompt(en, "scout");
+    expect(scout).toContain("<skill>");
+    expect(scout).toContain("idea scout on");
+    expect(buildSystemPrompt(en, "linkedin")).toContain("business case");
+    expect(scout).not.toContain("{OWNER}");
+    expect((await teamOverview(db)).agents.every((agent) => !agent.customSkill)).toBe(true);
+  });
+
+  it("your edited Skill replaces the default for that agent only", async () => {
+    await saveSkill(db, "telegram", "## Who you are\nThe Telegram writer. Always start with a question.");
+    const en = await writingContext(db, "en");
+    expect(buildSystemPrompt(en, "telegram")).toContain("Always start with a question.");
+    expect(buildSystemPrompt(en, "telegram")).not.toContain("close circle of followers");
+    expect(buildSystemPrompt(en, "linkedin")).not.toContain("Always start with a question.");
+    expect((await teamOverview(db)).agents.find((agent) => agent.id === "telegram")!.customSkill).toBe(true);
+  });
+
+  it("is trimmed, kept to the limit, and never empty", async () => {
+    await saveSkill(db, "linkedin", "  New skill  ");
+    expect((await getSkill(db, "linkedin")).text).toBe("New skill");
+    await expect(saveSkill(db, "linkedin", "x".repeat(SKILL_LENGTH + 1))).rejects.toThrow();
+    await expect(saveSkill(db, "linkedin", "   ")).rejects.toThrow();
+    expect((await getSkill(db, "linkedin")).text).toBe("New skill");
+  });
+
+  it("reset, or saving the default text unchanged, goes back to the default", async () => {
+    await saveSkill(db, "blogger", "Mine");
+    await resetSkill(db, "blogger");
+    expect(await getSkill(db, "blogger")).toMatchObject({ text: defaultSkill("blogger"), custom: false });
+    await saveSkill(db, "blogger", "Mine");
+    await saveSkill(db, "blogger", defaultSkill("blogger"));
+    expect((await getSkill(db, "blogger")).custom).toBe(false);
+  });
+
+  it("instructions written before Skills existed are kept, at the end of that agent's Skill", async () => {
+    await saveInstructions(db, "editor", { both: "Never cut my laugh.", byLanguage: { fa: "زیرنویس با فونت وزیر." } });
+    const skill = await getSkill(db, "editor");
+    expect(skill.custom).toBe(true);
+    expect(skill.text.startsWith(defaultSkill("editor"))).toBe(true);
+    expect(skill.text).toContain("Never cut my laugh.");
+    expect(skill.text).toContain("In Farsi (Persian) only: زیرنویس با فونت وزیر.");
+    const en = await writingContext(db, "en");
+    expect(buildSystemPrompt(en, "editor")).toContain("Never cut my laugh.");
+    expect(buildSystemPrompt(en, "scout")).not.toContain("Never cut my laugh.");
+
+    // Once you save the Skill you saw, the old boxes are gone and only the Skill is left.
+    await saveSkill(db, "editor", `${skill.text}\nOne more rule.`);
+    expect((await getInstructions(db, "editor")).both).toBe("");
+    expect((await getSkill(db, "editor")).text).toContain("Never cut my laugh.");
+  });
+
+  it("the rules for the whole team go to every agent, with the part for the language it's working in", async () => {
+    await saveInstructions(db, GENERAL, { both: "Sign off with 'Sam'.", byLanguage: { en: "British spelling.", fa: "نیم‌فاصله را رعایت کن." } });
     const en = await writingContext(db, "en");
     const fa = await writingContext(db, "fa");
-
-    const editorEn = buildSystemPrompt(en, "editor");
-    expect(editorEn).toContain("<owner_instructions>");
-    expect(editorEn).toContain("Never cut my laugh.");
-    expect(editorEn).toContain("Captions in sentence case.");
-    expect(editorEn).not.toContain("زیرنویس با فونت وزیر.");
-    const editorFa = buildSystemPrompt(fa, "editor");
-    expect(editorFa).toContain("Never cut my laugh.");
-    expect(editorFa).toContain("زیرنویس با فونت وزیر.");
-    expect(editorFa).not.toContain("Captions in sentence case.");
-
-    for (const other of ["scout", "linkedin", "scriptwriter", "manager"] as const) {
-      expect(buildSystemPrompt(en, other)).not.toContain("<owner_instructions>");
+    for (const agent of ["scout", "linkedin", "manager"] as const) {
+      expect(buildSystemPrompt(en, agent)).toContain("<owner_instructions>");
+      expect(buildSystemPrompt(en, agent)).toContain("Sign off with 'Sam'.");
     }
+    expect(buildSystemPrompt(en, "telegram")).toContain("British spelling.");
+    expect(buildSystemPrompt(en, "telegram")).not.toContain("نیم‌فاصله");
+    expect(buildSystemPrompt(fa, "telegram")).toContain("نیم‌فاصله را رعایت کن.");
+    expect((await getSkill(db, "telegram")).custom).toBe(false);
   });
 
-  it("are replaced when saved again, trimmed, and kept to the limit", async () => {
-    await saveInstructions(db, "linkedin", { both: "  Old  ", byLanguage: {} });
-    await saveInstructions(db, "linkedin", { both: "New ", byLanguage: {} });
-    expect(await getInstructions(db, "linkedin")).toMatchObject({ both: "New", byLanguage: {} });
-
-    await expect(saveInstructions(db, "linkedin", { both: "x".repeat(INSTRUCTIONS_LENGTH + 1), byLanguage: {} })).rejects.toThrow();
-    expect((await getInstructions(db, "linkedin")).both).toBe("New");
-
-    const overview = await teamOverview(db);
-    expect(overview.agents.find((agent) => agent.id === "linkedin")!.hasInstructions).toBe(true);
-    expect(overview.agents.find((agent) => agent.id === "telegram")!.hasInstructions).toBe(false);
-  });
-
-  it("clearing every box leaves the agent without instructions", async () => {
-    await saveInstructions(db, "telegram", { both: "Short.", byLanguage: {} });
-    await saveInstructions(db, "telegram", { both: " ", byLanguage: {} });
-    expect(buildSystemPrompt(await writingContext(db, "en"), "telegram")).not.toContain("<owner_instructions>");
-  });
-
-  it("the manager checks a draft against its writer's instructions", async () => {
-    await saveInstructions(db, "linkedin", { both: "Open with a number.", byLanguage: {} });
-    await saveInstructions(db, "manager", { both: "Be strict about hooks.", byLanguage: {} });
+  it("the manager checks a draft against its writer's edited Skill", async () => {
+    await saveSkill(db, "linkedin", "## Rules\n- Open with a number.");
+    await saveSkill(db, "manager", "## Rules\n- Be strict about hooks.");
     const calls: { system: string; prompt: string }[] = [];
     const generate = (async (system: string, prompt: string) => {
       calls.push({ system, prompt });
@@ -334,20 +363,21 @@ describe("each agent's own instructions", () => {
     await createWriter(generate).reviewPiece(context, { platform: "linkedin", ...input });
     expect(calls[0].prompt).toContain("<writer_instructions>");
     expect(calls[0].prompt).toContain("Open with a number.");
-    // The manager hears its own instructions too, as its standing brief.
     expect(calls[0].system).toContain("Be strict about hooks.");
 
+    // A writer still on its default Skill: the manager checks the channel's job, with no extra rules.
     await createWriter(generate).reviewPiece(context, { platform: "telegram", ...input });
-    expect(calls[1].prompt).not.toContain("Open with a number.");
+    expect(calls[1].prompt).not.toContain("<writer_instructions>");
+    expect(calls[1].prompt).toContain("<channel_skill>");
   });
 
-  it("the coach sees them, so it never teaches against them", async () => {
-    await saveInstructions(db, "linkedin", { both: "", byLanguage: { fa: "بدون هشتگ." } });
+  it("the coach sees your edited Skill, so it never teaches against it", async () => {
+    await saveSkill(db, "linkedin", "No hashtags, ever.");
     for (let i = 0; i < LEARN_AFTER; i++) {
       await recordSignal(db, { agent: "linkedin", language: "fa", kind: "edit", detail: `Edit ${i}` });
     }
     await learnFromFeedback(deps, await writingContext(db, "en"));
     const [, input] = writer.learn.mock.calls[0];
-    expect(input.agents[0]).toMatchObject({ agent: "linkedin", ownerInstructions: { both: "", byLanguage: { fa: "بدون هشتگ." } } });
+    expect(input.agents[0]).toMatchObject({ agent: "linkedin", ownerInstructions: { both: "No hashtags, ever.", byLanguage: {} } });
   });
 });

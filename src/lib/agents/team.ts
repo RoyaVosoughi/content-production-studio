@@ -5,6 +5,7 @@ import { agentInstructions, agentLessons, agentRuns, agentSignals, teamSettings 
 import { StudioError } from "../errors";
 import type { Language } from "../language";
 import { AGENT_IDS, INSTRUCTIONS_LENGTH, LEARNING_AGENTS, PASS_SCORE, type AgentId } from "./roster";
+import { allSkills } from "./skills";
 
 export { PASS_SCORE };
 /** The coach runs once this many new pieces of feedback have built up, so learning costs one AI request per batch. */
@@ -73,16 +74,14 @@ export function instructionsText(instructions: Instructions | undefined, languag
   return [instructions.both, instructions.byLanguage[language] ?? ""].map((part) => part.trim()).filter(Boolean).join("\n\n");
 }
 
-/** Each agent's instructions for work in this language: the general ones first, then its own. Agents without any are left out. */
+/**
+ * The rules for the whole team in this language, given to every agent. An agent's own instructions
+ * now live in its Skill (see skills.ts), so they are not repeated here.
+ */
 export async function instructionsFor(db: Db, language: Language): Promise<Partial<Record<AgentId, string>>> {
-  const all = (await allInstructions(db)) as Partial<Record<InstructionsOwner, Instructions>>;
-  const general = instructionsText(all[GENERAL], language);
-  const result: Partial<Record<AgentId, string>> = {};
-  for (const agent of AGENT_IDS) {
-    const text = [general, instructionsText(all[agent], language)].filter(Boolean).join("\n\n");
-    if (text) result[agent] = text;
-  }
-  return result;
+  const general = instructionsText((await getInstructions(db, GENERAL)) ?? undefined, language);
+  if (!general) return {};
+  return Object.fromEntries(AGENT_IDS.map((agent) => [agent, general]));
 }
 
 export async function saveInstructions(db: Db, agent: InstructionsOwner, instructions: Instructions) {
@@ -323,9 +322,9 @@ export async function learnFromFeedback(
   }
 
   const agents = LEARNING_AGENTS.filter((agent) => claimed.some((signal) => signal.agent === agent));
-  const [lessons, instructions] = await Promise.all([
+  const [lessons, skills] = await Promise.all([
     db.select().from(agentLessons).where(inArray(agentLessons.agent, agents)),
-    allInstructions(db),
+    allSkills(db),
   ]);
   try {
     const update = await writer.learn(context, {
@@ -333,7 +332,8 @@ export async function learnFromFeedback(
         agent,
         coachLessons: lessons.filter((row) => row.agent === agent && row.source === "coach").map((row) => row.textEn),
         ownerLessons: lessons.filter((row) => row.agent === agent && row.source === "owner").map((row) => row.textEn),
-        ownerInstructions: instructions[agent] ?? NO_INSTRUCTIONS,
+        // Your edited Skill is fixed for the coach: it never teaches against it.
+        ownerInstructions: skills[agent].custom ? { both: skills[agent].text, byLanguage: {} } : NO_INSTRUCTIONS,
         signals: claimed
           .filter((signal) => signal.agent === agent)
           .map(({ kind, language, detail }) => ({ kind, language, detail })),
@@ -409,7 +409,7 @@ export async function deleteLesson(db: Db, id: string) {
 // ---- The Team page ----
 
 export async function teamOverview(db: Db) {
-  const [settings, runs, lessons, signals, pending, instructions] = await Promise.all([
+  const [settings, runs, lessons, signals, pending, skills] = await Promise.all([
     getTeamSettings(db),
     db.select().from(agentRuns).orderBy(desc(agentRuns.createdAt)),
     db.select().from(agentLessons).orderBy(asc(agentLessons.createdAt)),
@@ -418,7 +418,7 @@ export async function teamOverview(db: Db) {
       .from(agentSignals)
       .groupBy(agentSignals.agent, agentSignals.kind),
     pendingFeedback(db),
-    allInstructions(db),
+    allSkills(db),
   ]);
   const agents = AGENT_IDS.map((id) => {
     const own = runs.filter((run) => run.agent === id);
@@ -435,7 +435,7 @@ export async function teamOverview(db: Db) {
       missed: count(["missed"]),
       lessons: lessons.filter((lesson) => lesson.agent === id),
       recent: own.filter((run) => run.problems.length > 0).slice(0, 3),
-      hasInstructions: [instructions[id]?.both ?? "", ...Object.values(instructions[id]?.byLanguage ?? {})].some((part) => part.trim() !== ""),
+      customSkill: skills[id].custom,
     };
   });
   return { settings, agents, pending, reviews: runs.filter((run) => run.score != null).length };

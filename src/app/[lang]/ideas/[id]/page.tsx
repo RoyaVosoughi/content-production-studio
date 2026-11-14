@@ -13,6 +13,8 @@ import { localize } from "@/lib/i18n";
 import { textDirection } from "@/lib/language";
 import { getScenario, getSibling } from "@/lib/studio";
 import { readyPage } from "@/lib/view";
+import { Stepper } from "@/components/stepper";
+import { studioProgress } from "@/lib/progress";
 
 export const dynamic = "force-dynamic";
 
@@ -51,8 +53,10 @@ export default async function IdeaPage({
     restore: t.originRestore,
   };
 
+  const steps = await studioProgress(db, lang, view);
   return (
     <>
+      <Stepper steps={steps} here="scenario" t={t} />
       <Link href={`/${lang}`} className="text-sm font-medium text-cobalt underline-offset-4 hover:underline">
         {t.backToIdeas}
       </Link>

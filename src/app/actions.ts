@@ -14,7 +14,9 @@ import { StudioError } from "@/lib/errors";
 import { isContentLanguage, isUiLanguage, type Language, type UiLanguage } from "@/lib/language";
 import { requireProfile, saveProfile, type Profile } from "@/lib/profile";
 import { brandFileText, proposeBrandKits, type BrandProposal } from "@/lib/brand-file";
-import { proposeInstructions, type InstructionsProposal } from "@/lib/instructions-file";
+import { INTERVIEW_QUESTIONS, interviewDocument, interviewIsEnough } from "@/lib/brand-interview";
+import * as skills from "@/lib/agents/skills";
+import { tailorSkill } from "@/lib/skill-tailor";
 import { VIEW_COOKIE } from "@/lib/view";
 import { cookies } from "next/headers";
 import { isPlatform } from "@/lib/platforms";
@@ -426,9 +428,30 @@ export async function readBrandFileAction(_: BrandFileState, form: FormData): Pr
   }
 }
 
+/** Turns the brand interview's answers into a Brand Kit proposal for each content language. Nothing is saved. */
+export async function interviewBrandAction(_: BrandFileState, form: FormData): Promise<BrandFileState> {
+  try {
+    const answers = Object.fromEntries(INTERVIEW_QUESTIONS.map((key) => [key, text(form, key)]));
+    if (!interviewIsEnough(answers)) {
+      throw new StudioError("Answer at least who you are, and who you write for or what about.");
+    }
+    const db = await getDb();
+    const profile = await requireProfile(db);
+    const { routedJson } = await import("@/lib/ai/routing");
+    const proposal = await proposeBrandKits(routedJson("setup"), {
+      text: interviewDocument(answers),
+      languages: profile.languages,
+      ownerName: profile.name,
+    });
+    return { proposal };
+  } catch (error) {
+    return { error: messageFor(error) };
+  }
+}
+
 /** Saves the Brand Kit for each content language in the form, and the "About you" text when one was sent. */
 export async function saveBrandSetupAction(_: ActionState, form: FormData) {
-  return perform(async () => {
+  const state = await perform(async () => {
     const db = await getDb();
     const profile = await requireProfile(db);
     for (const code of profile.languages) {
@@ -452,6 +475,8 @@ export async function saveBrandSetupAction(_: ActionState, form: FormData) {
       if (!general.both.trim()) await team.saveInstructions(db, team.GENERAL, { both: about, byLanguage: general.byLanguage });
     }
   });
+  if (!state && form.has("ui")) redirect(`/${uiFrom(form)}/brand?saved=1`);
+  return state;
 }
 
 // ---- Team ----
@@ -491,38 +516,54 @@ export async function learnNowAction(_: ActionState, form: FormData) {
 
 export async function saveInstructionsAction(_: ActionState, form: FormData) {
   return perform(async () => {
-    const agent = text(form, "agent");
-    if (!isAgentId(agent) && agent !== team.GENERAL) throw new StudioError("Unknown team member.");
+    // Only the rules for the whole team are saved here; each agent's own rules live in its Skill.
+    if (text(form, "agent") !== team.GENERAL) throw new StudioError("Each agent's own rules are now in its Skill.");
     // Each content language has its own box, named lang:<code>.
     const byLanguage = Object.fromEntries(
       [...form.keys()]
         .filter((key) => key.startsWith("lang:") && isContentLanguage(key.slice(5)))
         .map((key) => [key.slice(5), text(form, key)]),
     );
-    await team.saveInstructions(await getDb(), agent, { both: text(form, "both"), byLanguage });
+    await team.saveInstructions(await getDb(), team.GENERAL, { both: text(form, "both"), byLanguage });
   });
 }
 
-export type InstructionsFileState = { error?: string; proposal?: InstructionsProposal; fileName?: string } | null;
+// ---- Skills ----
 
-/** Reads an uploaded file and proposes one agent's instructions from it. Nothing is saved. */
-export async function readInstructionsFileAction(_: InstructionsFileState, form: FormData): Promise<InstructionsFileState> {
+function agentFrom(form: FormData) {
+  const agent = text(form, "agent");
+  if (!isAgentId(agent)) throw new StudioError("Unknown team member.");
+  return agent;
+}
+
+export async function saveSkillAction(_: ActionState, form: FormData) {
+  return perform(async () => {
+    await skills.saveSkill(await getDb(), agentFrom(form), String(form.get("skill") ?? ""));
+  });
+}
+
+export async function resetSkillAction(_: ActionState, form: FormData) {
+  return perform(async () => {
+    await skills.resetSkill(await getDb(), agentFrom(form));
+  });
+}
+
+export type SkillDraftState = { error?: string; skill?: string; changes?: string; at?: number } | null;
+
+/** Asks the AI to fit the Skill on screen to your Brand Kit. Nothing is saved until you save it. */
+export async function tailorSkillAction(_: SkillDraftState, form: FormData): Promise<SkillDraftState> {
   try {
-    const agent = text(form, "agent");
-    if (!isAgentId(agent)) throw new StudioError("Unknown team member.");
-    const file = form.get("instructionsFile");
-    if (!(file instanceof File)) throw new StudioError("Choose a file first.");
+    const agent = agentFrom(form);
+    const current = String(form.get("skill") ?? "").trim();
+    if (!current) throw new StudioError("Write or reset the Skill first.");
     const db = await getDb();
     const profile = await requireProfile(db);
-    const [fileText, current] = await Promise.all([brandFileText(file), team.getInstructions(db, agent)]);
+    const brand = await studio.getBrandKit(db, languageFrom(form));
+    if (brand.isDraft) throw new StudioError("Save your Brand Kit first, so there is a brand to fit the Skill to.");
     const { routedJson } = await import("@/lib/ai/routing");
-    const proposal = await proposeInstructions(routedJson("setup"), {
-      agent,
-      text: fileText,
-      ownerName: profile.name,
-      current: { both: current.both, byLanguage: current.byLanguage },
-    });
-    return { proposal, fileName: file.name };
+    const noteLanguage = uiFrom(form) === "fa" ? "Farsi (Persian)" : "English";
+    const draft = await tailorSkill(routedJson("setup"), { agent, current, brand, ownerName: profile.name, noteLanguage });
+    return { ...draft, at: Date.now() };
   } catch (error) {
     return { error: messageFor(error) };
   }

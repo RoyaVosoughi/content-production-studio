@@ -320,6 +320,13 @@ export const agentInstructions = pgTable("agent_instructions", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+/** An agent's Skill as you edited it. No row means the agent works from its default Skill file. */
+export const agentSkills = pgTable("agent_skills", {
+  agent: text("agent").primaryKey(),
+  text: text("text").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const teamSettings = pgTable("team_settings", {
   id: integer("id").primaryKey(),
   managerEnabled: boolean("manager_enabled").notNull().default(true),
@@ -522,6 +529,11 @@ ALTER TABLE agent_instructions ADD COLUMN IF NOT EXISTS by_language jsonb NOT NU
 UPDATE agent_instructions
   SET by_language = jsonb_strip_nulls(jsonb_build_object('en', NULLIF(en, ''), 'fa', NULLIF(fa, ''))), en = '', fa = ''
   WHERE en <> '' OR fa <> '';
+CREATE TABLE IF NOT EXISTS agent_skills (
+  agent text PRIMARY KEY,
+  text text NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
 CREATE TABLE IF NOT EXISTS team_settings (
   id integer PRIMARY KEY,
   manager_enabled boolean NOT NULL DEFAULT true,

@@ -14,6 +14,8 @@ import { languageName, textDirection, type Language } from "@/lib/language";
 import { articleUrl, displayName, headline, instagramLabel } from "@/lib/profile";
 import { slideBrand } from "@/lib/slides";
 import { readyPage } from "@/lib/view";
+import { Stepper } from "@/components/stepper";
+import { studioProgress } from "@/lib/progress";
 import { isPlatform, isVideoPlatform, platformLabel, PLATFORMS, TEXT_PLATFORMS, VIDEO_PLATFORMS, type Platform } from "@/lib/platforms";
 import { PUBLISHERS } from "@/lib/publishers";
 import { getScenario, getSibling } from "@/lib/studio";
@@ -102,8 +104,10 @@ export default async function ContentPage({ params }: { params: Promise<{ lang: 
       }),
   );
 
+  const steps = await studioProgress(db, lang, view);
   return (
     <>
+      <Stepper steps={steps} here="posts" t={t} />
       <Link href={`/${lang}/ideas/${id}`} className="text-sm font-medium text-cobalt underline-offset-4 hover:underline">
         {t.backToScenario}
       </Link>
