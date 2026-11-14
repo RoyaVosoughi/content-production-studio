@@ -12,7 +12,7 @@ import {
 } from "@/app/actions";
 import type { EditPlan, PieceContent, Phrase, ScriptPart } from "@/lib/db/schema";
 import type { Strings } from "@/lib/i18n";
-import type { UiLanguage as Language } from "@/lib/language";
+import { uiLocale, type UiLanguage as Language } from "@/lib/language";
 import { BODY_LIMITS, contentProblem, MANUAL_POSTING, platformLabel, postedText, VIDEO_FORMATS, VIDEO_TITLE_LIMIT, type VideoPlatform } from "@/lib/platforms";
 import { hasPlaceholder } from "@/lib/scenario";
 import { chapterLines, formatTime, keepRanges, outputDuration } from "@/lib/video/edit";
@@ -93,6 +93,30 @@ export function VideoEditor({ piece, video, language, t }: { piece: EditorPiece;
         </span>
       </h2>
       <PublishStatus piece={piece} language={language} t={t} />
+
+      {/* The script comes first: it's what you film from, so it reads in full before anything else. */}
+      {content.script && content.script.length > 0 && (
+        <section data-script-preview aria-label={t.scriptTitle} className="mt-4 rounded-lg border-s-4 border-cobalt bg-canvas p-4">
+          <p className="label">{t.scriptTitle}</p>
+          <ol className="mt-3 space-y-3">
+            {content.script.map((part, index) => (
+              <li key={index} className="flex gap-3">
+                <span aria-hidden className="font-display text-lg font-semibold text-cobalt">
+                  {(index + 1).toLocaleString(uiLocale(language))}
+                </span>
+                <div className="min-w-0" dir="auto">
+                  <p className="leading-relaxed">{part.say}</p>
+                  {part.show && (
+                    <p className="mt-1 text-sm text-ink-soft">
+                      <span className="font-semibold">{t.scriptShow}:</span> {part.show}
+                    </p>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ol>
+        </section>
+      )}
 
       <div className="mt-4 grid gap-5 lg:grid-cols-2">
         <div className="min-w-0">
