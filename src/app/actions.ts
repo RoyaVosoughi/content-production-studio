@@ -6,6 +6,7 @@ import { after } from "next/server";
 import { isAgentId } from "@/lib/agents/roster";
 import * as samples from "@/lib/agents/editor/samples";
 import * as team from "@/lib/agents/team";
+import * as animation from "@/lib/animations";
 import * as content from "@/lib/content";
 import { getDb } from "@/lib/db/client";
 import type { EditPlan } from "@/lib/db/schema";
@@ -409,6 +410,93 @@ export async function makeVideoAction(_: ActionState, form: FormData) {
   return perform(async () => {
     await content.makeVideo(await getDb(), text(form, "pieceId"), versionFrom(form));
   });
+}
+
+// ---- Video studio ----
+
+/** A talking-head video you filmed, without an idea first: goes straight to its post, ready for the clip. */
+export async function quickVideoAction(_: ActionState, form: FormData) {
+  let to: string | null = null;
+  const state = await perform(async () => {
+    const language = languageFrom(form);
+    const made = await content.startQuickVideo(await getDb(), {
+      language,
+      platform: text(form, "platform"),
+      title: text(form, "title"),
+      script: String(form.get("script") ?? ""),
+    });
+    await showLanguage(language);
+    to = `/${uiFrom(form)}/ideas/${made.ideaId}/content#post-${made.platform}`;
+  });
+  if (!state && to) redirect(to);
+  return state;
+}
+
+/** An animation from a script: the scenes are planned, then you land on its page to check them. */
+export async function createAnimationAction(_: ActionState, form: FormData) {
+  let to: string | null = null;
+  const state = await perform(async () => {
+    const id = await animation.createAnimation(await studio.defaultDeps(), {
+      language: languageFrom(form),
+      platform: text(form, "platform"),
+      title: text(form, "title"),
+      script: String(form.get("script") ?? ""),
+      mode: text(form, "mode") === "simple" ? "simple" : "ai",
+    });
+    to = `/${uiFrom(form)}/video/${id}`;
+  });
+  if (!state && to) redirect(to);
+  return state;
+}
+
+export async function saveAnimationAction(_: ActionState, form: FormData) {
+  return perform(async () => {
+    let scenes: unknown;
+    try {
+      scenes = JSON.parse(String(form.get("scenes") ?? "[]"));
+    } catch {
+      throw new StudioError("Reload the page and try again.");
+    }
+    if (!Array.isArray(scenes)) throw new StudioError("Reload the page and try again.");
+    await animation.saveAnimation(await getDb(), text(form, "id"), {
+      title: text(form, "title"),
+      platform: text(form, "platform"),
+      captions: form.get("captions") === "on",
+      scenes,
+    });
+  });
+}
+
+export async function replanAnimationAction(_: ActionState, form: FormData) {
+  return perform(async () => {
+    await animation.replanAnimation(await studio.defaultDeps(), text(form, "id"), text(form, "mode") === "simple" ? "simple" : "ai");
+  });
+}
+
+export async function makeAnimationAction(_: ActionState, form: FormData) {
+  return perform(async () => {
+    await animation.makeAnimation(await getDb(), text(form, "id"));
+  });
+}
+
+export async function removeNarrationAction(_: ActionState, form: FormData) {
+  return perform(async () => {
+    await animation.removeNarration(await getDb(), text(form, "id"));
+  });
+}
+
+export async function retryNarrationAction(_: ActionState, form: FormData) {
+  return perform(async () => {
+    await animation.retryNarration(await getDb(), text(form, "id"));
+  });
+}
+
+export async function deleteAnimationAction(_: ActionState, form: FormData) {
+  const state = await perform(async () => {
+    await animation.deleteAnimation(await getDb(), text(form, "id"));
+  });
+  if (!state) redirect(`/${uiFrom(form)}/video`);
+  return state;
 }
 
 export async function saveBrandKitAction(_: ActionState, form: FormData) {

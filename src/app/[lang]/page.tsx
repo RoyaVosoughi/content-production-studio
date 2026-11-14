@@ -97,6 +97,14 @@ export default async function StudioPage({ params }: { params: Promise<{ lang: s
         </p>
       </ActionForm>
 
+      <Link
+        href={`/${lang}/video`}
+        className="mt-4 block rounded-xl border border-mist p-4 text-sm font-medium text-cobalt hover:border-cobalt hover:bg-paper"
+        data-video-link
+      >
+        {t.videoStudio.homeLink}
+      </Link>
+
       <WaitingWork db={db} languages={languages} view={view} ui={lang} t={t} />
 
       {missingKeys.length > 0 && (

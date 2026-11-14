@@ -41,11 +41,16 @@ export async function saveFootageStream(
   body: ReadableStream<Uint8Array>,
   originalName: string,
   size: number,
-  { dir = FOOTAGE_DIR(), maxBytes = MAX_FOOTAGE_BYTES }: { dir?: string; maxBytes?: number } = {},
+  {
+    dir = FOOTAGE_DIR(),
+    maxBytes = MAX_FOOTAGE_BYTES,
+    extensions = EXTENSIONS,
+    wrongType = "Use an MP4, MOV, M4V, WebM or MKV video.",
+  }: { dir?: string; maxBytes?: number; extensions?: string[]; wrongType?: string } = {},
 ): Promise<string> {
   const extension = originalName.split(".").pop()?.toLowerCase() ?? "";
-  const tooBig = `A video can be up to ${(maxBytes / 1024 ** 3).toFixed(0)} GB.`;
-  if (!EXTENSIONS.includes(extension)) throw new StudioError("Use an MP4, MOV, M4V, WebM or MKV video.");
+  const tooBig = `A file can be up to ${maxBytes >= 1024 ** 3 ? `${(maxBytes / 1024 ** 3).toFixed(0)} GB` : `${Math.round(maxBytes / 1024 ** 2)} MB`}.`;
+  if (!extensions.includes(extension)) throw new StudioError(wrongType);
   if (!Number.isFinite(size) || size <= 0) throw new StudioError("Choose a video first.");
   if (size > maxBytes) throw new StudioError(tooBig);
   const free = await freeBytes(dir);

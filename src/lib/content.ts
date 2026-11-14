@@ -11,6 +11,8 @@ import {
   pieces,
   pieceVersions,
   publications,
+  scenarios,
+  scenarioVersions,
   scheduledPosts,
   videoRenders,
   type EditPlan,
@@ -745,6 +747,44 @@ export async function videoState(db: Db, pieceId: string, platform: VideoPlatfor
     renderKey: key,
     problem,
   };
+}
+
+/**
+ * A video you already filmed, without going through ideas and scenarios: the studio makes a small
+ * approved idea for it and one video post, ready for your clip. What you say, when you paste it,
+ * becomes the script, which helps the editor correct the captions.
+ */
+export async function startQuickVideo(
+  db: Db,
+  input: { language: Language; platform: string; title: string; script: string },
+): Promise<{ ideaId: string; pieceId: string; platform: VideoPlatform }> {
+  if (!isVideoPlatform(input.platform)) throw new StudioError("Choose where the video goes.");
+  const title = input.title.trim().slice(0, 100);
+  if (!title) throw new StudioError("Give the video a title, so you can find it again.");
+  const script = input.script
+    .split(/\n\s*\n/)
+    .map((part) => part.replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .slice(0, 40)
+    .map((say) => ({ say, show: "" }));
+  return db.transaction(async (tx) => {
+    const [idea] = await tx
+      .insert(ideas)
+      .values({ language: input.language, title, hook: "", angle: "", whyNow: "", pillar: "", sources: [], status: "approved" })
+      .returning({ id: ideas.id });
+    const scenario: ScenarioContent = { title, hook: "", mainPoints: [], angle: "", example: "", callToAction: "" };
+    await tx.insert(scenarios).values({ ideaId: idea.id, currentVersion: 1, approvedVersion: 1, channels: null });
+    await tx.insert(scenarioVersions).values({ ideaId: idea.id, version: 1, content: scenario, origin: "edit" });
+    const [piece] = await tx.insert(pieces).values({ ideaId: idea.id, platform: input.platform, currentVersion: 1 }).returning({ id: pieces.id });
+    await tx.insert(pieceVersions).values({
+      pieceId: piece.id,
+      version: 1,
+      content: { body: "", title, ...(script.length ? { script } : {}) },
+      origin: "edit",
+      scenarioVersion: 1,
+    });
+    return { ideaId: idea.id, pieceId: piece.id, platform: input.platform as VideoPlatform };
+  });
 }
 
 export async function ideaForContentPage(db: Db, ideaId: string) {

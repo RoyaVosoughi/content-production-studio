@@ -52,6 +52,7 @@ function fakeWriter() {
     ),
     revisePiece: vi.fn(async () => ({ body: "AI changed" })),
     planEdit: vi.fn(),
+    planAnimation: vi.fn(),
     ...passingTeam(),
   };
 }

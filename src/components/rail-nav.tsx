@@ -15,9 +15,9 @@ function switchHref(ui: UiLanguage, back: string) {
   return `/api/switch?${new URLSearchParams({ ui, back })}`;
 }
 
-export type SectionId = "ideas" | "team" | "results" | "brand" | "connections" | "setup" | "guide" | "calendar";
+export type SectionId = "ideas" | "team" | "results" | "brand" | "connections" | "setup" | "guide" | "calendar" | "video";
 
-const OTHER_SECTIONS: SectionId[] = ["team", "results", "brand", "connections", "setup", "guide", "calendar"];
+const OTHER_SECTIONS: SectionId[] = ["video", "team", "results", "brand", "connections", "setup", "guide", "calendar"];
 
 /** Which section a path belongs to, and whether it is that section's top page. */
 export function sectionOf(pathname: string, language: UiLanguage): { id: SectionId; top: boolean } {
@@ -33,6 +33,7 @@ function sections(language: UiLanguage, t: Strings, ready: boolean) {
   const all: { id: SectionId; href: string; label: string }[] = [
     { id: "brand", href: `/${language}/brand`, label: t.navBrand },
     { id: "ideas", href: `/${language}`, label: t.navStudio },
+    { id: "video", href: `/${language}/video`, label: t.videoStudio.nav },
     { id: "calendar", href: `/${language}/calendar`, label: t.navCalendar },
     { id: "team", href: `/${language}/team`, label: t.navTeam },
     { id: "results", href: `/${language}/results`, label: t.navResults },

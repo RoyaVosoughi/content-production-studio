@@ -97,6 +97,21 @@ export const EditProposalSchema = z.object({
 });
 export type EditProposal = z.infer<typeof EditProposalSchema>;
 
+export const AnimationPlanSchema = z.object({
+  scenes: z
+    .array(
+      z.object({
+        kind: z.enum(["title", "statement", "number", "points", "steps", "quote", "compare", "end"]),
+        say: z.string().describe("The exact words of the script read while this scene is on screen, copied verbatim. Empty only for a silent end card"),
+        heading: z.string().describe("The on-screen heading: at most 8 words"),
+        text: z.string().describe("title: a subtitle. statement: a small label above. number: the big number. quote: the quote. compare: the two column names as 'A | B'. Otherwise empty"),
+        items: z.array(z.string()).describe("points and steps: 2 to 5 items of at most 6 words. compare: 2 to 4 rows as 'left | right'. Otherwise empty"),
+      }),
+    )
+    .describe("The scenes in the order of the script"),
+});
+export type AnimationPlan = z.infer<typeof AnimationPlanSchema>;
+
 export const ArticlePieceSchema = z.object({
   title: z.string().describe("The article headline, at most 100 characters"),
   excerpt: z.string().describe("A one or two sentence summary, at most 300 characters"),
@@ -227,6 +242,11 @@ export interface WritingModel {
       request?: string;
     },
   ): Promise<EditProposal>;
+  /** The video editor turns a script into explainer scenes for an animation. */
+  planAnimation(
+    context: WritingContext,
+    input: { platform: VideoPlatform; title: string; script: string },
+  ): Promise<AnimationPlan>;
   /** The manager checks a channel's final draft. Ideas and scenarios are checked by you. */
   reviewPiece(
     context: WritingContext,

@@ -66,6 +66,7 @@ beforeEach(async () => {
     writePiece: vi.fn(),
     revisePiece: vi.fn(),
     planEdit: vi.fn(),
+    planAnimation: vi.fn(),
     ...passingTeam(),
   };
   search = vi.fn(async () => [RESULT]);

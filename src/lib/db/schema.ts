@@ -1,4 +1,5 @@
 import { bigint, boolean, integer, jsonb, pgTable, primaryKey, real, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
+import type { AnimationScene } from "../video/animation";
 
 export const brandKits = pgTable("brand_kits", {
   language: text("language").primaryKey(),
@@ -181,6 +182,40 @@ export const videoRenders = pgTable("video_renders", {
   progress: real("progress"),
   error: text("error"),
   duration: real("duration"),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/**
+ * An explainer animation made from a script, outside any idea: scenes in the brand's style, timed by
+ * reading speed or by a narration you upload, which Whisper reads so the scenes follow your voice.
+ */
+export const animations = pgTable("animations", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  language: text("language").notNull(),
+  platform: text("platform").notNull(),
+  title: text("title").notNull(),
+  script: text("script").notNull(),
+  scenes: jsonb("scenes").$type<AnimationScene[]>().notNull(),
+  captions: boolean("captions").notNull().default(true),
+  /** planning while the video editor plans the scenes in the background; failed when it couldn't. */
+  planStatus: text("plan_status").$type<"planning" | "failed">(),
+  planError: text("plan_error"),
+  /** The narration's file name in the narration folder, while there is one. */
+  narration: text("narration"),
+  narrationName: text("narration_name"),
+  narrationStatus: text("narration_status").$type<"processing" | "ready" | "failed">(),
+  narrationStage: text("narration_stage"),
+  narrationProgress: real("narration_progress"),
+  narrationError: text("narration_error"),
+  narrationDuration: real("narration_duration"),
+  words: jsonb("words").$type<Word[]>(),
+  /** The fingerprint of the last video started, and how making it went. */
+  renderKey: text("render_key"),
+  renderStatus: text("render_status").$type<"working" | "ready" | "failed">(),
+  renderProgress: real("render_progress"),
+  renderError: text("render_error"),
+  duration: real("duration"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -441,6 +476,32 @@ CREATE TABLE IF NOT EXISTS scenario_versions (
   created_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (idea_id, version)
 );
+CREATE TABLE IF NOT EXISTS animations (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  language text NOT NULL,
+  platform text NOT NULL,
+  title text NOT NULL,
+  script text NOT NULL,
+  scenes jsonb NOT NULL,
+  captions boolean NOT NULL DEFAULT true,
+  narration text,
+  narration_name text,
+  narration_status text,
+  narration_stage text,
+  narration_progress real,
+  narration_error text,
+  narration_duration real,
+  words jsonb,
+  render_key text,
+  render_status text,
+  render_progress real,
+  render_error text,
+  duration real,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+ALTER TABLE animations ADD COLUMN IF NOT EXISTS plan_status text;
+ALTER TABLE animations ADD COLUMN IF NOT EXISTS plan_error text;
 CREATE TABLE IF NOT EXISTS pieces (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   idea_id uuid NOT NULL REFERENCES ideas(id) ON DELETE CASCADE,

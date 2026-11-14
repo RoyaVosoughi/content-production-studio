@@ -48,6 +48,7 @@ function makeWriter(): { [K in keyof WritingModel]: ReturnType<typeof vi.fn> } {
     writePiece: vi.fn(async () => ({ body: "A Telegram note" })),
     revisePiece: vi.fn(),
     planEdit: vi.fn(),
+    planAnimation: vi.fn(),
     ...passingTeam(),
   };
 }

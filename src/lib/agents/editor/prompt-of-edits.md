@@ -94,7 +94,7 @@ Start a chapter wherever a new point begins, the first one at the first kept phr
 
 ## animated-explainer-reel · Animated explainer Reel (picture-in-picture + full-screen animation)
 - Use when: animation, explainer, picture in picture
-- Studio: no (needs an animation tool such as HyperFrames, run with Claude Code on your computer)
+- Studio: partly. "Animate a script" on the Video studio page makes the full-screen explainer scenes; picture-in-picture over your clip still needs another tool
 - Keywords: animation, animated, explainer, picture in picture, pop-up, split screen, full screen, motion graphics, glass, grid, انیمیشن, متحرک, توضیحی, تصویر در تصویر, تمام صفحه, موشن گرافیک
 - Source: Reels editor prompt
 

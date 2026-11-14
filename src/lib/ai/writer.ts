@@ -12,6 +12,7 @@ import {
   IdeaDraftSchema,
   IdeaTextBatchSchema,
   EditProposalSchema,
+  AnimationPlanSchema,
   LessonUpdateSchema,
   ReviewSchema,
   InstagramPieceSchema,
@@ -419,6 +420,36 @@ ${phrases.map((phrase) => `${phrase.number} [${phrase.start.toFixed(1)}–${phra
       );
     },
 
+    planAnimation(context, { platform, title, script }) {
+      const { width, height } = VIDEO_FORMATS[platform];
+      return run(
+        "editor",
+        context,
+        `Turn {OWNER}'s script into an explainer motion-graphics video for ${EDIT_GOALS[platform]}, ${width > height ? "landscape" : "portrait"}. Each scene is a card of animated text in their brand's colours. Choose a kind for every scene:
+- title: the opening hook, as a heading with an optional subtitle.
+- statement: one strong sentence, shown big.
+- number: a striking figure from the script (text is the number, such as 73% or 3x; heading says what it means). Only use numbers that are in the script. Never invent one.
+- points: a heading and 2 to 5 short points.
+- steps: a heading and 2 to 5 steps in order.
+- quote: a quote from the script (text), and who said it (heading).
+- compare: two sides, such as before and after, or myth and fact.
+- end: the closing card. Leave say empty unless the script ends with a call to action, and leave heading and text empty to use their usual follow line.
+
+Rules:
+- Cover the whole script, in order. Each scene's say is the next part of the script, copied word for word, so that all the says together are the script. A narration of the script is timed against them.
+- One idea per scene, about 8 to 30 words of say each. Usually 5 to 14 scenes. Start with a title scene and finish with an end scene.
+- On-screen text is short and complements what is said: a heading of at most 8 words, items of at most 6. Never paste the whole say on screen.
+- Vary the kinds so the video keeps moving. Use points or steps where the script lists things, number only for real figures, compare for contrasts.
+- Write every on-screen field in the language of the script.
+
+<video_title>${title}</video_title>
+<script>
+${script}
+</script>`,
+        AnimationPlanSchema,
+      );
+    },
+
     revisePiece(context, { platform, content, request }) {
       return run(
         agentForPlatform(platform),
@@ -521,6 +552,7 @@ export const studioWriter: WritingModel = {
   writePiece: (...args) => activeWriter().writePiece(...args),
   revisePiece: (...args) => activeWriter().revisePiece(...args),
   planEdit: (...args) => activeWriter().planEdit(...args),
+  planAnimation: (...args) => activeWriter().planAnimation(...args),
   reviewPiece: (...args) => activeWriter().reviewPiece(...args),
   learn: (...args) => activeWriter().learn(...args),
 };
