@@ -338,7 +338,12 @@ export const teamSettings = pgTable("team_settings", {
   lastLearnedAt: timestamp("last_learned_at", { withTimezone: true }),
   lastLearnError: text("last_learn_error"),
   lastLearnSummary: jsonb("last_learn_summary").$type<{ en: string; fa: string }>(),
+  /** Your weekly posting pattern for the calendar. Null until you change the default. */
+  weekPlan: jsonb("week_plan").$type<WeekPlan>(),
 });
+
+/** Which channels go out on each weekday (0 is Sunday), at what time, and how far apart one idea's posts are. */
+export type WeekPlan = { days: string[][]; time: string; gapDays: number };
 
 /** AI requests sent per model per day, for the usage counter. The day follows Google's quota day (Pacific time). */
 export const aiUsage = pgTable(
@@ -547,6 +552,7 @@ CREATE TABLE IF NOT EXISTS team_settings (
   last_learn_error text,
   last_learn_summary jsonb
 );
+ALTER TABLE team_settings ADD COLUMN IF NOT EXISTS week_plan jsonb;
 CREATE TABLE IF NOT EXISTS ai_usage (
   day text NOT NULL,
   model text NOT NULL,

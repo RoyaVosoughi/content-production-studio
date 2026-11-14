@@ -336,6 +336,27 @@ export async function schedulePostAction(_: ActionState, form: FormData) {
   });
 }
 
+/** Your weekly posting pattern: the channels for each weekday, the time, and the days between one idea's posts. */
+export async function saveWeekPlanAction(_: ActionState, form: FormData) {
+  return perform(async () => {
+    const { saveWeekPlan } = await import("@/lib/calendar");
+    const days = Array.from({ length: 7 }, (_, day) => form.getAll(`day:${day}`).map(String));
+    await saveWeekPlan(await getDb(), { days, time: text(form, "time"), gapDays: Number(text(form, "gapDays")) });
+  });
+}
+
+/** Schedules every suggestion in the week on screen. */
+export async function scheduleWeekAction(_: ActionState, form: FormData) {
+  let problems: string[] = [];
+  const state = await perform(async () => {
+    const { scheduleWeek } = await import("@/lib/calendar");
+    const week = Math.max(0, Math.min(12, Number(text(form, "week")) || 0));
+    ({ problems } = await scheduleWeek(await content.defaultPublishDeps(), text(form, "language"), Number(text(form, "firstDay")) || 0, week));
+  });
+  if (state?.error || problems.length === 0) return state;
+  return { error: problems.join(" · ") };
+}
+
 export async function cancelScheduleAction(_: ActionState, form: FormData) {
   return perform(async () => {
     const { cancelSchedule } = await import("@/lib/schedule");
