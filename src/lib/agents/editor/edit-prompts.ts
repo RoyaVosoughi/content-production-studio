@@ -18,7 +18,8 @@ export type EditPrompt = {
 /** Reads the prompt file's blocks: each starts with "## id · Title", then its "- Key: value" lines, then the prompt. */
 export function parseEditPrompts(markdown: string): EditPrompt[] {
   const prompts: EditPrompt[] = [];
-  for (const block of markdown.split(/^## /m).slice(1)) {
+  // Git on Windows may check the file out with CRLF line endings, which would hide every field.
+  for (const block of markdown.replace(/\r\n?/g, "\n").split(/^## /m).slice(1)) {
     const [heading, ...rest] = block.split("\n");
     const match = /^([a-z0-9-]+)\s*·\s*(.+)$/.exec(heading.trim());
     if (!match) continue;

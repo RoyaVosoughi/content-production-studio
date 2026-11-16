@@ -17,7 +17,8 @@ export const SKILLS_DIR = path.join(process.cwd(), "src", "lib", "agents", "skil
 export { SKILL_LENGTH };
 
 export function defaultSkill(agent: AgentId): string {
-  return readFileSync(path.join(SKILLS_DIR, `${agent}.md`), "utf8").trim();
+  // Git on Windows may check the file out with CRLF line endings; the studio always works with plain \n.
+  return readFileSync(path.join(SKILLS_DIR, `${agent}.md`), "utf8").replace(/\r\n?/g, "\n").trim();
 }
 
 /** text is what the agent follows; custom says whether it is yours rather than the default. */
