@@ -229,10 +229,8 @@ export default async function ContentPage({ params }: { params: Promise<{ lang: 
       <Link href={`/${lang}/ideas/${id}`} className="text-sm font-medium text-cobalt underline-offset-4 hover:underline">
         {t.backToScenario}
       </Link>
-      <details className="mt-4">
-        <summary className="cursor-pointer text-sm font-medium text-ink-soft hover:text-cobalt">{t.showIdeaMap}</summary>
-        <IdeaMap db={db} ui={lang} t={t} languages={contentLanguages} view={view} idea={idea} sibling={sibling} here="content" />
-      </details>
+      {/* The map stays in view on every step, as on the scenario page, so you always see where this idea is. */}
+      <IdeaMap db={db} ui={lang} t={t} languages={contentLanguages} view={view} idea={idea} sibling={sibling} here="content" />
 
       <h1 className="mt-6 font-display text-3xl font-semibold">{t.contentTitle}</h1>
       <p className="mt-1 font-medium text-ink-soft" lang={language} dir={textDirection(language)}>

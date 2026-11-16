@@ -2,7 +2,8 @@ import { copyFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { studioDb } from "./fixtures/brand";
+import { EXAMPLE_BRAND, studioDb } from "./fixtures/brand";
+import { createWriter, type GenerateJson } from "@/lib/ai/writer";
 import type { Db } from "@/lib/db/client";
 import type { Word } from "@/lib/db/schema";
 import {
@@ -130,6 +131,62 @@ describe("scenes", () => {
     expect(html).toContain("@sam");
     expect(html.match(/class="scene /g)).toHaveLength(8);
   });
+
+  it("splits a script into cartoon scenes without AI, ending with a celebration and the end card", () => {
+    const scenes = simpleScenes("The box", "Nima found a box. He opened it. It was full of ideas.", "cartoon");
+    expect(scenes.map((item) => item.kind)).toEqual(["cartoon", "cartoon", "end"]);
+    expect(scenes[0]).toMatchObject({ heading: "The box", say: "Nima found a box. He opened it. It was full of ideas.", cartoon: { action: "walk_in" } });
+    expect(scenes[1]).toMatchObject({ say: "", cartoon: { action: "celebrate", friend: true } });
+  });
+
+  it("keeps cartoon directions only on cartoon scenes, and gives each action time to play out", () => {
+    const [cartoon, text] = cleanScenes([
+      { kind: "cartoon", cartoon: { place: "Park", action: "open_box", prop: "box", friend: true } },
+      { kind: "statement", heading: "Big", cartoon: { place: "park" } },
+    ]);
+    expect(cartoon.cartoon).toEqual({ place: "park", action: "open_box", prop: "box", friend: true });
+    expect(text.cartoon).toBeUndefined();
+    // A silent cartoon scene with a box to open stays up long enough for the lid to open.
+    expect(readingSeconds(cartoon)).toBeGreaterThanOrEqual(3.4);
+  });
+
+  it("asks the AI for a cartoon plan in the cartoon style, and turns its answer into cartoon scenes", async () => {
+    let prompt = "";
+    const generate = (async (_system: string, text: string) => {
+      prompt = text;
+      return { scenes: [{ say: "Nima found a box.", place: "home", action: "open_box", prop: "box", friend: false, sign: "The box", bubble: "Hmm?" }] };
+    }) as GenerateJson;
+    const plan = await createWriter(generate).planAnimation(
+      { language: "en", brand: EXAMPLE_BRAND.en },
+      { platform: "reel", title: "The box", script: "Nima found a box.", style: "cartoon" },
+    );
+    expect(prompt).toContain("open_box (a reveal or a discovery)");
+    expect(prompt).toContain("<script>\nNima found a box.\n</script>");
+    expect(plan.scenes).toEqual([
+      { kind: "cartoon", say: "Nima found a box.", heading: "The box", text: "Hmm?", items: [], cartoon: { place: "home", action: "open_box", prop: "box", friend: false } },
+    ]);
+  });
+
+  it("draws cartoon scenes with the characters, place, prop, sign and bubble, mirrored for Farsi", () => {
+    const all = cleanScenes([
+      { kind: "cartoon", heading: "<The box>", text: "Wow", say: "Nima found a box.", cartoon: { place: "office", action: "open_box", prop: "box", friend: true } },
+      { kind: "end" },
+    ]);
+    const times = sceneTimeline(all, null);
+    const en = animationHtml({ scenes: all, times, cues: [], platform: "reel", language: "en", brand: BRAND });
+    expect(en).toContain('data-action="open_box"');
+    expect(en).toContain('data-talk="1"');
+    expect(en).toContain('class="cx main"');
+    expect(en).toContain('class="cx friend"');
+    expect(en).toContain('class="pp box"');
+    expect(en).toContain("&lt;The box&gt;");
+    expect(en).toContain('class="cbub"');
+    expect(en).not.toContain("scaleX(-1)");
+    expect(() => new Function(en.match(/<script>([\s\S]*)<\/script>/)![1])).not.toThrow();
+    const fa = animationHtml({ scenes: all, times, cues: [], platform: "reel", language: "fa", brand: BRAND });
+    expect(fa).toContain("scaleX(-1)");
+    expect(fa).toContain("tail-r");
+  });
 });
 
 let dataDir: string;
@@ -167,7 +224,7 @@ describe("animations", () => {
     await waitForJob(`plan:${id}`);
     const row = await requireAnimation(db, id);
     expect(row.planStatus).toBeNull();
-    expect(planAnimation).toHaveBeenCalledWith(expect.objectContaining({ language: "en" }), { platform: "reel", title: "Agents", script: "Agents save time." });
+    expect(planAnimation).toHaveBeenCalledWith(expect.objectContaining({ language: "en" }), { platform: "reel", title: "Agents", script: "Agents save time.", style: "text" });
     expect(row.scenes.map((item) => item.kind)).toEqual(["title", "number", "end"]);
 
     const plain = await requireAnimation(db, await made({ language: "en", platform: "short", title: "T", script: "One. Two.", mode: "simple" }));
@@ -191,6 +248,26 @@ describe("animations", () => {
     finish({ scenes: SCENES });
     await waitForJob(`plan:${id}`);
     expect((await requireAnimation(db, id)).scenes).toEqual([scene({ heading: "Mine" })]);
+  });
+
+  it("makes a cartoon: plain cartoon scenes at once, then the AI's cartoon plan in the cartoon style", async () => {
+    planAnimation.mockResolvedValueOnce({
+      scenes: [
+        { kind: "cartoon", say: "Nima found a box.", heading: "The box", text: "", items: [], cartoon: { place: "office", action: "open_box", prop: "box", friend: false } },
+        { kind: "cartoon", say: "He smiled.", heading: "", text: "Wow", items: [], cartoon: { place: "moon", action: "dance", prop: "box", friend: "yes" } },
+      ],
+    });
+    const id = await createAnimation(deps, { language: "en", platform: "reel", title: "The box", script: "Nima found a box. He smiled.", mode: "ai", style: "cartoon" });
+    const first = await requireAnimation(db, id);
+    expect(first.style).toBe("cartoon");
+    expect(first.scenes.every((item) => item.kind === "cartoon" || item.kind === "end")).toBe(true);
+    await waitForJob(`plan:${id}`);
+    expect(planAnimation).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ style: "cartoon" }));
+    const row = await requireAnimation(db, id);
+    expect(row.scenes.map((item) => item.kind)).toEqual(["cartoon", "cartoon", "end"]);
+    expect(row.scenes[0].cartoon).toEqual({ place: "office", action: "open_box", prop: "box", friend: false });
+    // Directions the studio can't draw become safe defaults instead of failing.
+    expect(row.scenes[1].cartoon).toEqual({ place: "office", action: "talk", prop: "box", friend: false });
   });
 
   it("refuses an empty script or an unknown network", async () => {

@@ -16,9 +16,11 @@ import {
   captionCues,
   cleanScenes,
   sceneTimeline,
+  sentences,
   simpleScenes,
   totalDuration,
   type AnimationScene,
+  type AnimationStyle,
   type Narration,
 } from "./video/animation";
 import { detectSilences, isRunning, speechWindows, startJob, whisperTranscriber, type Transcriber } from "./video/footage";
@@ -65,22 +67,24 @@ const touch = (db: Db, id: string, fields: Partial<typeof animations.$inferInser
  */
 export async function createAnimation(
   deps: Pick<StudioDeps, "db" | "writer">,
-  input: { language: Language; platform: string; title: string; script: string; mode: "ai" | "simple" },
+  input: { language: Language; platform: string; title: string; script: string; mode: "ai" | "simple"; style?: AnimationStyle },
 ): Promise<string> {
   if (!isVideoPlatform(input.platform)) throw new StudioError("Choose where the video goes.");
   const script = input.script.trim();
   const title = input.title.trim().slice(0, 120);
+  const style = input.style ?? "text";
   if (!script) throw new StudioError("Paste the script first.");
   if (script.length > SCRIPT_LIMIT) throw new StudioError(`A script can be up to ${SCRIPT_LIMIT.toLocaleString("en-US")} characters.`);
-  const scenes = simpleScenes(title, script);
+  const scenes = simpleScenes(title, script, style);
   const [row] = await deps.db
     .insert(animations)
     .values({
       language: input.language,
       platform: input.platform,
-      title: title || scenes[0]?.heading || "Animation",
+      title: title || scenes[0]?.heading || sentences(script)[0]?.slice(0, 120) || "Animation",
       script,
       scenes,
+      style,
       planStatus: input.mode === "ai" ? "planning" : null,
     })
     .returning({ id: animations.id });
@@ -101,6 +105,7 @@ export async function planScenes({ db, writer }: Pick<StudioDeps, "db" | "writer
       platform: row.platform as VideoPlatform,
       title: row.title,
       script: row.script,
+      style: row.style,
     });
     const scenes = cleanScenes(plan.scenes);
     if (scenes.length === 0) throw new StudioError("The AI didn't return any scenes. Try again, or split the script without AI.");
@@ -131,7 +136,7 @@ export async function saveAnimation(db: Db, id: string, input: { title: string; 
 export async function replanAnimation(deps: Pick<StudioDeps, "db" | "writer">, id: string, mode: "ai" | "simple") {
   const row = await requireAnimation(deps.db, id);
   if (mode === "simple") {
-    await touch(deps.db, id, { scenes: simpleScenes(row.title, row.script), planStatus: null, planError: null });
+    await touch(deps.db, id, { scenes: simpleScenes(row.title, row.script, row.style), planStatus: null, planError: null });
     return;
   }
   if (isRunning(`plan:${id}`)) return;

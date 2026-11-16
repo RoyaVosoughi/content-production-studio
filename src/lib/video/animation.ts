@@ -2,6 +2,7 @@ import { brandFonts, brandPalette } from "../brand-style";
 import type { Word } from "../db/schema";
 import { languageInfo, type Language } from "../language";
 import { VIDEO_FORMATS, type VideoPlatform } from "../platforms";
+import { ACTION_SECONDS, CARTOON_SCRIPT, cartoonCss, cartoonLayout, cartoonScene, cleanCartoon, simpleCartoon, type Cartoon } from "./cartoon";
 import type { VideoBrand } from "./overlays";
 
 // An explainer animation made from any script: a list of scenes drawn in the brand's colours and
@@ -10,10 +11,15 @@ import type { VideoBrand } from "./overlays";
 // Kept free of server code, so the scene editor and the tests can use it.
 
 /** Change this when a design or the timing changes, so animations made the old way are made again. */
-export const ANIMATION_VERSION = 1;
+export const ANIMATION_VERSION = 2;
 
-export const SCENE_KINDS = ["title", "statement", "number", "points", "steps", "quote", "compare", "end"] as const;
+export const SCENE_KINDS = ["title", "statement", "number", "points", "steps", "quote", "compare", "cartoon", "end"] as const;
 export type SceneKind = (typeof SCENE_KINDS)[number];
+
+/** How an animation looks: cartoon scenes with characters, or animated text cards. */
+export const ANIMATION_STYLES = ["cartoon", "text"] as const;
+export type AnimationStyle = (typeof ANIMATION_STYLES)[number];
+export const isAnimationStyle = (value: string): value is AnimationStyle => (ANIMATION_STYLES as readonly string[]).includes(value);
 
 /**
  * One scene. `say` is the part of the script read while it's on screen, which is also its caption.
@@ -24,9 +30,10 @@ export type SceneKind = (typeof SCENE_KINDS)[number];
  * - points, steps: heading, then up to five items
  * - quote: text is the quote, heading says who said it
  * - compare: heading, text is the two column names as "A | B", each item a row as "left | right"
+ * - cartoon: the cartoon directions in `cartoon`, heading as a sign at the top, text as the host's speech bubble
  * - end: heading and text, or the brand's follow line when both are empty
  */
-export type AnimationScene = { kind: SceneKind; say: string; heading: string; text: string; items: string[] };
+export type AnimationScene = { kind: SceneKind; say: string; heading: string; text: string; items: string[]; cartoon?: Cartoon };
 
 export type SceneTime = { start: number; end: number };
 export type Cue = { start: number; end: number; text: string };
@@ -44,10 +51,10 @@ export function isSceneKind(value: string): value is SceneKind {
 const clip = (value: unknown, limit: number) => (typeof value === "string" ? value.replace(/\s+/g, " ").trim().slice(0, limit) : "");
 
 /** Trims every field to its limit and drops what a scene can't show, so a plan from the AI or a form is always drawable. */
-export function cleanScenes(scenes: Partial<AnimationScene>[]): AnimationScene[] {
+export function cleanScenes(scenes: { [K in keyof AnimationScene]?: unknown }[]): AnimationScene[] {
   return scenes
     .slice(0, SCENE_LIMITS.scenes)
-    .map((scene) => {
+    .map((scene): AnimationScene => {
       const kind = typeof scene.kind === "string" && isSceneKind(scene.kind) ? scene.kind : "statement";
       return {
         kind,
@@ -60,9 +67,11 @@ export function cleanScenes(scenes: Partial<AnimationScene>[]): AnimationScene[]
               .filter(Boolean)
               .slice(0, SCENE_LIMITS.items)
           : [],
+        ...(kind === "cartoon" ? { cartoon: cleanCartoon(scene.cartoon) } : {}),
       };
     })
-    .filter((scene) => scene.kind === "end" || scene.say || scene.heading || scene.text || scene.items.length > 0);
+    // A cartoon scene shows something even with no words, so it's always kept.
+    .filter((scene) => scene.kind === "end" || scene.kind === "cartoon" || scene.say || scene.heading || scene.text || scene.items.length > 0);
 }
 
 export const countWords = (text: string) => text.split(/\s+/).filter(Boolean).length;
@@ -82,24 +91,45 @@ const shorten = (text: string, words: number) => {
 };
 
 /**
- * Scenes made without the AI: the title first, then one big line for every few sentences, then the
+ * Scenes made without the AI: the title first, then one scene for every few sentences, then the
  * end card. Plain, but it covers the whole script in order and can be changed scene by scene.
+ * In the cartoon style, each of those scenes is a cartoon moment instead of a big line.
  */
-export function simpleScenes(title: string, script: string): AnimationScene[] {
-  const scenes: AnimationScene[] = [];
+export function simpleScenes(title: string, script: string, style: AnimationStyle = "text"): AnimationScene[] {
   const parts = sentences(script);
+  const groups: string[][] = [];
   let group: string[] = [];
-  const flush = () => {
-    if (group.length === 0) return;
-    const say = group.join(" ");
-    scenes.push({ kind: "statement", say, heading: shorten(group[0].replace(/[.!?؟…]+$/, ""), 14), text: "", items: [] });
-    group = [];
-  };
   for (const part of parts) {
     group.push(part);
-    if (countWords(group.join(" ")) >= 22) flush();
+    if (countWords(group.join(" ")) >= 22) {
+      groups.push(group);
+      group = [];
+    }
   }
-  flush();
+  if (group.length > 0) groups.push(group);
+
+  if (style === "cartoon") {
+    const scenes: AnimationScene[] = groups.map((lines, index) => ({
+      kind: "cartoon",
+      say: lines.join(" "),
+      heading: index === 0 ? clip(title, SCENE_LIMITS.heading) : "",
+      text: "",
+      items: [],
+      cartoon: simpleCartoon(index, false),
+    }));
+    if (scenes.length === 0 && title.trim()) scenes.push({ kind: "cartoon", say: "", heading: clip(title, SCENE_LIMITS.heading), text: "", items: [], cartoon: simpleCartoon(0, false) });
+    scenes.push({ kind: "cartoon", say: "", heading: "", text: "", items: [], cartoon: simpleCartoon(0, true) });
+    scenes.push({ kind: "end", say: "", heading: "", text: "", items: [] });
+    return cleanScenes(scenes);
+  }
+
+  const scenes: AnimationScene[] = groups.map((lines) => ({
+    kind: "statement",
+    say: lines.join(" "),
+    heading: shorten(lines[0].replace(/[.!?؟…]+$/, ""), 14),
+    text: "",
+    items: [],
+  }));
   const first = scenes[0];
   if (first && title.trim()) scenes[0] = { ...first, kind: "title", heading: clip(title, SCENE_LIMITS.heading) };
   else if (title.trim()) scenes.unshift({ kind: "title", say: "", heading: clip(title, SCENE_LIMITS.heading), text: "", items: [] });
@@ -124,7 +154,9 @@ export function readingSeconds(scene: AnimationScene): number {
   if (scene.kind === "end" && !scene.say) return END_SCENE;
   const said = countWords(scene.say);
   const seconds = said > 0 ? said / SPOKEN_PER_SECOND + ENTRANCE : shownWords(scene) / READ_PER_SECOND + ENTRANCE + 0.6;
-  return Math.min(MAX_SCENE, Math.max(MIN_SCENE, seconds));
+  // A cartoon scene stays long enough for its action to play out, such as a box being opened.
+  const least = scene.kind === "cartoon" && scene.cartoon ? Math.max(MIN_SCENE, ACTION_SECONDS[scene.cartoon.action]) : MIN_SCENE;
+  return Math.min(MAX_SCENE, Math.max(least, seconds));
 }
 
 /**
@@ -276,6 +308,11 @@ function sceneBody(scene: AnimationScene, platform: VideoPlatform, language: Lan
         .map(([, b], index) => `<p data-d="${(0.7 + index * 0.35).toFixed(2)}">${escape(b)}</p>`)
         .join("")}</div></div>`;
     }
+    case "cartoon": {
+      const { width, height } = VIDEO_FORMATS[platform];
+      const layout = cartoonLayout(width, height, languageInfo(language).dir === "rtl");
+      return cartoonScene(scene.cartoon ?? cleanCartoon(null), scene.heading, scene.text, layout, brandPalette(brand.colors));
+    }
     case "end": {
       const end = endLines(scene, platform, language, brand);
       return `<div class="end"><b data-d="0">${escape(end.line)}</b>${end.small ? `<p data-d="0.35">${escape(end.small)}</p>` : ""}</div>`;
@@ -325,8 +362,9 @@ export function animationHtml({ scenes, times, cues, platform, language, brand, 
 <style>
 *{box-sizing:border-box}
 html,body{margin:0;padding:0}
-body{background:${preview ? "#000" : C.deep};overflow:hidden}
-#frame{position:relative;width:${width}px;height:${height}px;overflow:hidden;background:${C.deep};color:#fff;font-family:${fonts.body};transform-origin:0 0}
+/* The page lays out left to right so the scaled frame (origin top left) stays in view; the frame keeps the language's direction. */
+body{background:${preview ? "#000" : C.deep};overflow:hidden;direction:ltr}
+#frame{position:relative;width:${width}px;height:${height}px;overflow:hidden;background:${C.deep};color:#fff;font-family:${fonts.body};transform-origin:0 0;direction:${info.dir}}
 .blob{position:absolute;border-radius:50%;filter:blur(${px(10)});opacity:.55}
 #b1{width:${px(900)};height:${px(900)};background:radial-gradient(circle,${C.cobalt} 0%,transparent 68%)}
 #b2{width:${px(700)};height:${px(700)};background:radial-gradient(circle,${C.amber}55 0%,transparent 66%)}
@@ -360,10 +398,19 @@ blockquote{font-family:${fonts.display};font-size:${px(wide ? 74 : 80)};font-wei
 .end p{font-size:${px(44)};font-weight:600;opacity:.9;line-height:${lh(1.4)}}
 #captions{position:absolute;left:${px(70)};right:${px(70)};bottom:${captionsAt};display:flex;justify-content:center;pointer-events:none}
 #captions span{display:inline-block;max-width:100%;text-align:center;background:rgba(0,0,0,.62);color:#fff;border-radius:${px(22)};padding:${px(14)} ${px(30)};font-size:${px(wide ? 52 : 60)};font-weight:700;line-height:${lh(1.3)};opacity:0}
+${scenes.some((scene) => scene.kind === "cartoon") ? cartoonCss(px, C, fonts, lh) : ""}
 ${preview ? `#play{position:fixed;inset:0;display:grid;place-items:center;background:rgba(0,0,0,.35);border:0;color:#fff;font:600 18px system-ui;cursor:pointer}` : ""}
 </style></head><body><div id="frame">
 <div class="blob" id="b1"></div><div class="blob" id="b2"></div>
-${scenes.map((scene, index) => `<section class="scene k-${scene.kind}" data-i="${index}">${sceneBody(scene, platform, language, brand)}</section>`).join("\n")}
+${scenes
+  .map((scene, index) => {
+    const cartoon = scene.kind === "cartoon" ? cartoonLayout(width, height, info.dir === "rtl") : null;
+    const extra = cartoon
+      ? ` data-action="${(scene.cartoon ?? cleanCartoon(null)).action}" data-talk="${scene.say.trim() ? 1 : 0}" data-g="${cartoon.G}" data-w="${width}" data-h="${height}"`
+      : "";
+    return `<section class="scene k-${scene.kind}" data-i="${index}"${extra}>${sceneBody(scene, platform, language, brand)}</section>`;
+  })
+  .join("\n")}
 <div id="captions"><span></span></div><div id="progress"></div>
 </div>
 ${preview ? `${preview.audio ? `<audio id="voice" src="${escape(preview.audio)}" preload="auto"></audio>` : ""}<button id="play" type="button">▶ ${escape(preview.playLabel)}</button>` : ""}
@@ -386,12 +433,14 @@ function count(el,p){
   var n=(target*ease(p)).toFixed(dec);if(m[2].indexOf(',')>=0)n=Number(n).toLocaleString('en-US',{minimumFractionDigits:dec,maximumFractionDigits:dec});
   var out=m[1]+n+m[3];if(fa)out=out.replace(/\\d/g,function(d){return FA[d]});el.textContent=out;
 }
+${CARTOON_SCRIPT}
 function seek(t){
   for(var i=0;i<scenes.length;i++){
     var s=D.times[i],local=t-s.start,len=s.end-s.start,el=scenes[i];
     if(local<0||local>=len){el.style.opacity=0;continue}
     var out=i===scenes.length-1?1:clamp((len-local)/0.35);
     el.style.opacity=out;el.style.transform='scale('+(0.97+0.03*out)+')';
+    if(el.hasAttribute('data-action'))cartoon(el,local,len,el.getAttribute('data-talk')==='1');
     for(var j=0;j<parts[i].length;j++){
       var p=parts[i][j],d=parseFloat(p.getAttribute('data-d'))||0,v=ease((local-d)/0.55);
       p.style.opacity=v;p.style.transform='translateY('+((1-v)*${Math.round(46 * u)})+'px)';
