@@ -110,7 +110,30 @@ export const AnimationPlanSchema = z.object({
     )
     .describe("The scenes in the order of the script"),
 });
-export type AnimationPlan = z.infer<typeof AnimationPlanSchema>;
+/**
+ * Cartoon scenes. Places, actions and props are plain strings here, not enums, so a free model that
+ * answers with a near miss isn't rejected; the studio maps anything unknown to a safe default.
+ */
+export const CartoonPlanSchema = z.object({
+  scenes: z
+    .array(
+      z.object({
+        say: z.string().describe("The exact words of the script read while this scene is on screen, copied verbatim. Empty only for the closing scene"),
+        place: z.string().describe("Where it happens: office, home, street, park, classroom, shop, stage or night"),
+        action: z.string().describe("What the host does: walk_in, talk, wave, point, think, surprised, celebrate, open_box, type_laptop, shrug, sad, present or run"),
+        prop: z.string().describe("The one object in the scene: none, box, laptop, phone, lightbulb, chart, coffee, book, rocket, money, clock or key"),
+        friend: z.boolean().describe("Whether a second character is in the scene with the host"),
+        sign: z.string().describe("Optional sign at the top of the screen, at most 6 words. Usually empty; use it for the title and key turns"),
+        bubble: z.string().describe("Optional speech bubble from the host, at most 8 words, that adds to what is said rather than repeating it. Often empty"),
+      }),
+    )
+    .describe("The scenes in the order of the script"),
+});
+
+/** The planned scenes, in either style. The studio cleans them into drawable scenes. */
+export type AnimationPlan = {
+  scenes: { kind: string; say: string; heading: string; text: string; items: string[]; cartoon?: Record<string, unknown> }[];
+};
 
 export const ArticlePieceSchema = z.object({
   title: z.string().describe("The article headline, at most 100 characters"),
@@ -244,10 +267,10 @@ export interface WritingModel {
       request?: string;
     },
   ): Promise<EditProposal>;
-  /** The video editor turns a script into explainer scenes for an animation. */
+  /** The video editor turns a script into scenes for an animation: cartoon moments, or animated text cards. */
   planAnimation(
     context: WritingContext,
-    input: { platform: VideoPlatform; title: string; script: string },
+    input: { platform: VideoPlatform; title: string; script: string; style?: "cartoon" | "text" },
   ): Promise<AnimationPlan>;
   /** The manager checks a channel's final draft. Ideas and scenarios are checked by you. */
   reviewPiece(

@@ -13,6 +13,7 @@ import {
   IdeaTextBatchSchema,
   EditProposalSchema,
   AnimationPlanSchema,
+  CartoonPlanSchema,
   LessonUpdateSchema,
   ReviewSchema,
   InstagramPieceSchema,
@@ -420,8 +421,44 @@ ${phrases.map((phrase) => `${phrase.number} [${phrase.start.toFixed(1)}–${phra
       );
     },
 
-    planAnimation(context, { platform, title, script }) {
+    async planAnimation(context, { platform, title, script, style }) {
       const { width, height } = VIDEO_FORMATS[platform];
+      if (style === "cartoon") {
+        const plan = await run(
+          "editor",
+          context,
+          `Turn {OWNER}'s script into a short cartoon for ${EDIT_GOALS[platform]}, ${width > height ? "landscape" : "portrait"}. The studio draws two flat cartoon characters in their brand's colours: the host, and sometimes a friend. For every scene, choose a place, what the host does, one object, and whether the friend is there.
+
+Places: office, home, street, park, classroom, shop, stage, night.
+Actions: walk_in (the host walks into the scene; good for the opening), talk, wave (hello or goodbye), point (at the object), think (a question or a problem), surprised (a twist or a striking fact), celebrate (a win, a result, the ending), open_box (a reveal or a discovery), type_laptop (work, building, writing), shrug (doubt, "it depends"), sad (a pain point or a failure), present (show the chart: growth, numbers, results), run (speed, hurry, being busy).
+Objects: none, box, laptop, phone, lightbulb (an idea), chart (numbers, growth), coffee (a break, mornings), book (learning), rocket (launch, growth), money (cost, income), clock (time), key (the answer, a secret).
+
+Rules:
+- Cover the whole script, in order. Each scene's say is the next part of the script, copied word for word, so that all the says together are the script. A narration of the script is timed against them.
+- One moment per scene, about 8 to 30 words of say each. Usually 5 to 12 scenes.
+- Start with walk_in or wave, with the video title as the sign. End with a celebrate or wave scene whose say is empty unless the script ends with a call to action.
+- Pick the action and object that show what the say means, so a viewer understands the story even with the sound off. Vary them so the cartoon keeps moving, and keep the same place for a few scenes in a row unless the story moves.
+- Add the friend when the script talks about another person, a customer or a conversation.
+- Signs and bubbles are short and complement what is said; never paste the say into them. Leave them empty when they add nothing.
+- Write signs and bubbles in the language of the script.
+
+<video_title>${title}</video_title>
+<script>
+${script}
+</script>`,
+          CartoonPlanSchema,
+        );
+        return {
+          scenes: plan.scenes.map((scene) => ({
+            kind: "cartoon",
+            say: scene.say,
+            heading: scene.sign,
+            text: scene.bubble,
+            items: [],
+            cartoon: { place: scene.place, action: scene.action, prop: scene.prop, friend: scene.friend },
+          })),
+        };
+      }
       return run(
         "editor",
         context,

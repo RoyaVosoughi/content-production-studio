@@ -199,6 +199,8 @@ export const animations = pgTable("animations", {
   title: text("title").notNull(),
   script: text("script").notNull(),
   scenes: jsonb("scenes").$type<AnimationScene[]>().notNull(),
+  /** cartoon: scenes with characters drawn by the studio. text: animated text cards. */
+  style: text("style").$type<"cartoon" | "text">().notNull().default("text"),
   captions: boolean("captions").notNull().default(true),
   /** planning while the video editor plans the scenes in the background; failed when it couldn't. */
   planStatus: text("plan_status").$type<"planning" | "failed">(),
@@ -505,6 +507,7 @@ CREATE TABLE IF NOT EXISTS animations (
 );
 ALTER TABLE animations ADD COLUMN IF NOT EXISTS plan_status text;
 ALTER TABLE animations ADD COLUMN IF NOT EXISTS plan_error text;
+ALTER TABLE animations ADD COLUMN IF NOT EXISTS style text NOT NULL DEFAULT 'text';
 CREATE TABLE IF NOT EXISTS pieces (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   idea_id uuid NOT NULL REFERENCES ideas(id) ON DELETE CASCADE,

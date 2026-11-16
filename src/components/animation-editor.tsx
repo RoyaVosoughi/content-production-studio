@@ -8,6 +8,7 @@ import type { Strings } from "@/lib/i18n";
 import type { UiLanguage } from "@/lib/language";
 import { platformLabel, VIDEO_PLATFORMS, type VideoPlatform } from "@/lib/platforms";
 import { clock, hasItems, SCENE_KINDS, type AnimationScene, type SceneKind } from "@/lib/video/animation";
+import { CARTOON_ACTIONS, CARTOON_PLACES, CARTOON_PROPS, DEFAULT_CARTOON, type Cartoon } from "@/lib/video/cartoon";
 
 const percent = (value: number | null, ui: UiLanguage) => {
   const amount = Math.round((value ?? 0) * 100);
@@ -48,7 +49,38 @@ export function PlanningNote({ id, planning, error, t }: { id: string; planning:
   );
 }
 
-const blank = (kind: SceneKind): AnimationScene => ({ kind, say: "", heading: "", text: "", items: [] });
+const blank = (kind: SceneKind): AnimationScene =>
+  kind === "cartoon"
+    ? { kind, say: "", heading: "", text: "", items: [], cartoon: { ...DEFAULT_CARTOON } }
+    : { kind, say: "", heading: "", text: "", items: [] };
+
+/** The place, action, object and friend of a cartoon scene. */
+function CartoonFields({ cartoon, onChange, t }: { cartoon: Cartoon; onChange: (next: Cartoon) => void; t: Strings }) {
+  const v = t.videoStudio;
+  const choose = <K extends "place" | "action" | "prop">(key: K, label: string, options: readonly Cartoon[K][], names: Record<Cartoon[K], string>) => (
+    <label className="block">
+      <span className="label mb-1 block">{label}</span>
+      <select value={cartoon[key]} onChange={(event) => onChange({ ...cartoon, [key]: event.target.value })} className="field">
+        {options.map((option) => (
+          <option key={option} value={option}>
+            {names[option]}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+  return (
+    <div className="mt-3 grid gap-3 sm:grid-cols-3" data-cartoon>
+      {choose("place", v.cartoonPlace, CARTOON_PLACES, v.places)}
+      {choose("action", v.cartoonAction, CARTOON_ACTIONS, v.actions)}
+      {choose("prop", v.cartoonProp, CARTOON_PROPS, v.props)}
+      <label className="flex items-center gap-2 text-sm sm:col-span-3">
+        <input type="checkbox" checked={cartoon.friend} onChange={(event) => onChange({ ...cartoon, friend: event.target.checked })} />
+        {v.cartoonFriend}
+      </label>
+    </div>
+  );
+}
 
 /**
  * The scenes, one card each: its kind, its on-screen text and the line said meanwhile. Saving
@@ -128,7 +160,10 @@ export function SceneEditor({
                 <select
                   aria-label={v.kind}
                   value={scene.kind}
-                  onChange={(event) => change(index, { kind: event.target.value as SceneKind })}
+                  onChange={(event) => {
+                    const kind = event.target.value as SceneKind;
+                    change(index, kind === "cartoon" ? { kind, cartoon: scene.cartoon ?? { ...DEFAULT_CARTOON } } : { kind });
+                  }}
                   className="field !w-auto !py-1 text-sm"
                 >
                   {SCENE_KINDS.map((kind) => (
@@ -176,6 +211,9 @@ export function SceneEditor({
                   </label>
                 )}
               </div>
+              {scene.kind === "cartoon" && (
+                <CartoonFields cartoon={scene.cartoon ?? DEFAULT_CARTOON} onChange={(cartoon) => change(index, { cartoon })} t={t} />
+              )}
               {hasItems(scene.kind) && (
                 <label className="mt-3 block">
                   <span className="label mb-1 block">{scene.kind === "compare" ? v.itemsCompare : v.items}</span>
@@ -200,7 +238,7 @@ export function SceneEditor({
 
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-sm text-ink-soft">{v.addScene}:</span>
-        {(["statement", "points", "number", "steps", "quote", "compare"] as SceneKind[]).map((kind) => (
+        {(["cartoon", "statement", "points", "number", "steps", "quote", "compare"] as SceneKind[]).map((kind) => (
           <button
             key={kind}
             type="button"

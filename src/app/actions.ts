@@ -498,6 +498,7 @@ export async function createAnimationAction(_: ActionState, form: FormData) {
       title: text(form, "title"),
       script: String(form.get("script") ?? ""),
       mode: text(form, "mode") === "simple" ? "simple" : "ai",
+      style: text(form, "style") === "text" ? "text" : "cartoon",
     });
     to = `/${uiFrom(form)}/video/${id}`;
   });
