@@ -11,7 +11,7 @@ export type VideoPlatform = (typeof VIDEO_PLATFORMS)[number];
 export const PLATFORM_NAMES: Record<Platform, string> = {
   telegram: "Telegram",
   linkedin: "LinkedIn",
-  instagram: "Instagram",
+  instagram: "Instagram carousel",
   website: "Website",
   reel: "Instagram Reel",
   short: "YouTube Short",
@@ -45,6 +45,7 @@ export const INSTAGRAM_HASHTAG_LIMIT = 30;
 export function platformLabel(platform: Platform, language: UiLanguage): string {
   if (language === "fa") {
     const farsi: Partial<Record<Platform, string>> = {
+      instagram: "کاروسل اینستاگرام",
       website: "وب‌سایت",
       reel: "ریلز اینستاگرام",
       short: "شورتز یوتیوب",

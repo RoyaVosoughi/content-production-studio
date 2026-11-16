@@ -83,6 +83,7 @@ export type PostedRow = {
   /** The post's own title, or the start of its text. */
   opening: string;
   url: string | null;
+  externalId: string | null;
   postedAt: Date | null;
   numbers: ResultNumbers | null;
   note: string;
@@ -118,6 +119,7 @@ export async function postedPieces(db: Db): Promise<PostedRow[]> {
           pillar: idea.pillar,
           opening: openingOf(version.content),
           url: publication.url,
+          externalId: publication.externalId,
           postedAt: publication.postedAt,
           numbers: result?.numbers ?? null,
           note: result?.note ?? "",
@@ -176,15 +178,22 @@ export async function saveResults(db: Db, pieceId: string, raw: Partial<Record<M
   const posted = await postedPieces(db);
   const row = posted.find((entry) => entry.pieceId === pieceId);
   if (!row) throw new StudioError("Only a live post can have results. Post it first.");
-  const numbers = parseNumbers(row.platform, raw);
-  const values = { numbers, note: note.trim(), checkedAt: new Date() };
+  return recordNumbers(db, row, parseNumbers(row.platform, raw), note.trim());
+}
+
+/**
+ * Stores a live post's numbers, however they arrived: typed in, read from Instagram, or imported from
+ * a file. A post that now clearly stands out gets its writer and the scout told.
+ */
+export async function recordNumbers(db: Db, row: PostedRow, numbers: ResultNumbers, note: string) {
+  const values = { numbers, note, checkedAt: new Date() };
   await db
     .insert(postResults)
-    .values({ pieceId, ...values })
+    .values({ pieceId: row.pieceId, ...values })
     .onConflictDoUpdate({ target: postResults.pieceId, set: values });
 
   const ranked = await resultsOverview(db);
-  const mine = ranked.find((entry) => entry.pieceId === pieceId);
+  const mine = ranked.find((entry) => entry.pieceId === row.pieceId);
   if (!mine || (mine.standing !== "strong" && mine.standing !== "weak")) return mine?.standing ?? null;
   const network = PLATFORM_NAMES[row.platform];
   const shown = RESULT_METRICS[row.platform].map((metric) => `${numbers[metric] ?? 0} ${metric}`).join(", ");
@@ -233,4 +242,43 @@ export async function performanceBrief(db: Db, language: Language): Promise<Perf
           .join(" | "),
       };
     });
+}
+
+/** Posts this old or newer are checked again; older ones have stopped moving. */
+const SYNC_MAX_AGE_DAYS = 60;
+/** A post's numbers keep growing for a while, so it is read again once its last reading is this old. */
+const SYNC_MIN_GAP_HOURS = 20;
+
+export type SyncReport = { updated: number; failed: number; firstError: string | null };
+
+/**
+ * Reads the numbers of live Instagram posts from Instagram, so nobody types them in. Posts read within
+ * the last day, and posts older than two months, are left alone. One post failing doesn't stop the rest.
+ */
+export async function syncInstagramResults(
+  db: Db,
+  read: (mediaId: string) => Promise<ResultNumbers>,
+  now = new Date(),
+): Promise<SyncReport> {
+  const report: SyncReport = { updated: 0, failed: 0, firstError: null };
+  const hour = 3600 * 1000;
+  for (const row of await postedPieces(db)) {
+    if (row.platform !== "instagram" || !row.externalId || !row.postedAt) continue;
+    if (now.getTime() - row.postedAt.getTime() > SYNC_MAX_AGE_DAYS * 24 * hour) continue;
+    if (row.checkedAt && now.getTime() - row.checkedAt.getTime() < SYNC_MIN_GAP_HOURS * hour) continue;
+    try {
+      await recordNumbers(db, row, await read(row.externalId), row.note);
+      report.updated++;
+    } catch (error) {
+      report.failed++;
+      report.firstError ??= error instanceof Error ? error.message : "Instagram didn't answer.";
+    }
+  }
+  return report;
+}
+
+/** Sentences about what works, for the idea scout. Empty until there are enough compared posts. */
+export async function performancePatterns(db: Db): Promise<string[]> {
+  const { patternLines } = await import("./insights");
+  return patternLines(await resultsOverview(db));
 }

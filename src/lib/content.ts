@@ -1,3 +1,4 @@
+import { pickFor } from "./channels";
 import { samplesForEdit } from "./agents/editor/samples";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { agentForPlatform } from "./agents/roster";
@@ -10,6 +11,8 @@ import {
   pieces,
   pieceVersions,
   publications,
+  scenarios,
+  scenarioVersions,
   scheduledPosts,
   videoRenders,
   type EditPlan,
@@ -40,6 +43,7 @@ import { hasPlaceholder } from "./scenario";
 import { getScenario, getSibling, requireIdea, writingContext, type StudioDeps } from "./studio";
 import type { WritingContext } from "./ai/types";
 import type { ScenarioContent } from "./db/schema";
+import { cleanImage, IMAGE_SIZES, imageAlt, imageProblem, type PostImage } from "./post-image";
 
 const STALE_PIECE = "This post changed since you opened it. Reload and review the latest version.";
 /** A send that never reported back, because the app stopped mid-post, is treated as unknown after this long. */
@@ -50,11 +54,13 @@ export type PublishDeps = {
   publishers: Record<Platform, Publisher>;
   /** Draws the Instagram slides as JPEG images. */
   slideImages: (content: PieceContent, language: Language, brand: SlideBrand) => Promise<Buffer[]>;
+  /** Draws a LinkedIn post's or an article's brand image as a JPEG. */
+  postImage?: (image: PostImage, language: Language, brand: SlideBrand) => Promise<Buffer>;
 };
 
 export async function defaultPublishDeps(): Promise<PublishDeps> {
-  const { renderSlides } = await import("./render");
-  return { db: await getDb(), publishers: PUBLISHERS, slideImages: renderSlides };
+  const { renderSlides, renderPostImage } = await import("./render");
+  return { db: await getDb(), publishers: PUBLISHERS, slideImages: renderSlides, postImage: renderPostImage };
 }
 
 function isScenarioApproved(scenario: Awaited<ReturnType<typeof getScenario>>) {
@@ -121,6 +127,7 @@ export async function createPieces(
         platform,
         scenario: scenario.current.content,
         sources: version.sources.map(({ title, url }) => ({ title, url })),
+        channel: pickFor(scenario.channels, platform),
         finish: (draft) => (platform === "website" ? { ...draft, slug } : draft),
       });
       const content = written;
@@ -171,16 +178,19 @@ async function writeChecked(
     platform,
     scenario,
     sources,
+    channel,
     finish,
   }: {
     platform: Platform;
     scenario: ScenarioContent;
     sources: { title: string; url: string }[];
+    /** The angle and brief the scenario writer gave this channel. */
+    channel?: { angle: string; brief: string };
     /** Fields the studio adds to the writer's draft, such as the article's web address. */
     finish: (draft: PieceContent) => PieceContent;
   },
 ) {
-  const brief = { platform, scenario, sources };
+  const brief = { platform, scenario, sources, channel };
   return managerCheck(db, {
     enabled,
     agent: agentForPlatform(platform),
@@ -189,6 +199,9 @@ async function writeChecked(
     ruleProblem: (draft) => {
       const problem = contentProblem(platform, draft);
       if (problem) return problem;
+      if (hasPlaceholder(postedText(platform, draft))) {
+        return "It still has text in square brackets. Replace every placeholder with real words from the scenario or sources.";
+      }
       const links = uncheckedLinks(draft.body, sources);
       return links.length ? `It links to addresses that aren't in the sources: ${links.join(", ")}. Use only the supplied sources.` : null;
     },
@@ -344,6 +357,7 @@ export async function rewritePieceFromScenario({ db, writer }: StudioDeps, piece
     platform: piece.platform,
     scenario: scenario.current.content,
     sources: idea.sources.map(({ title, url }) => ({ title, url })),
+    channel: pickFor(scenario.channels, piece.platform),
     finish: (written) => ({ ...old.content, ...written }),
   });
   await addVersion(db, pieceId, basedOn, draft, "ai", scenario.currentVersion);
@@ -361,6 +375,30 @@ export async function setPiecePhoto(db: Db, pieceId: string, basedOn: number, ph
   const old = await pieceVersion(db, pieceId, basedOn);
   const { photo: _previous, ...rest } = old.content;
   await addVersion(db, pieceId, basedOn, photo ? { ...rest, photo } : rest, "edit", old.scenarioVersion);
+}
+
+/** The brand image that goes out with this post, when its platform sends one. */
+export function imageOf(platform: Platform, content: PieceContent): PostImage | null {
+  return (platform === "linkedin" || platform === "website") && content.image ? content.image : null;
+}
+
+/** Adds, changes or removes a LinkedIn post's or an article's brand image, as a new version. */
+export async function setPieceImage(db: Db, pieceId: string, basedOn: number, value: unknown) {
+  const piece = await requirePiece(db, pieceId);
+  if (piece.platform !== "linkedin" && piece.platform !== "website") {
+    throw new StudioError("Only LinkedIn posts and website articles have a brand image.");
+  }
+  const old = await pieceVersion(db, pieceId, basedOn);
+  const { image: _previous, ...rest } = old.content;
+  if (value === null) {
+    await addVersion(db, pieceId, basedOn, rest, "edit", old.scenarioVersion);
+    return;
+  }
+  const image = cleanImage(value);
+  if (!image) throw new StudioError("The image couldn't be read. Reload and try again.");
+  const problem = imageProblem(image);
+  if (problem) throw new StudioError(problem);
+  await addVersion(db, pieceId, basedOn, { ...rest, image }, "edit", old.scenarioVersion);
 }
 
 export async function restorePieceVersion(db: Db, pieceId: string, basedOn: number, version: number) {
@@ -419,7 +457,7 @@ export async function checkPostable({ db, publishers }: Pick<PublishDeps, "db" |
 }
 
 export async function approveAndPublish(
-  { db, publishers, slideImages }: PublishDeps,
+  { db, publishers, slideImages, postImage }: PublishDeps,
   pieceId: string,
   version: number,
   { checkedNotPosted = false }: { checkedNotPosted?: boolean } = {},
@@ -458,6 +496,18 @@ export async function approveAndPublish(
       content,
       key: `${pieceId}-v${version}`,
       images: () => slideImages(content, language, slideBrand(profile)),
+      image: async () => {
+        const image = imageOf(piece.platform, content);
+        if (!image) return null;
+        const draw = postImage ?? (await import("./render")).renderPostImage;
+        const { width, height } = IMAGE_SIZES[image.size];
+        try {
+          return { jpeg: await draw(image, language, slideBrand(profile)), alt: imageAlt(image), width, height };
+        } catch (error) {
+          // Drawing happens before anything is sent, so the post certainly didn't go out.
+          throw new PublishRejected(error instanceof StudioError ? error.message : "The post's image couldn't be made, so nothing was posted.");
+        }
+      },
       profile,
     });
     await finish({ status: "posted", externalId, url, postedAt: new Date(), error: null });
@@ -571,7 +621,7 @@ export async function markPostedByHand(db: Db, pieceId: string, version: number,
     } catch {}
     if (!manual.hosts.some((allowed) => host === allowed || host.endsWith(`.${allowed}`))) {
       throw new StudioError(
-        `The link should be the ${PLATFORM_NAMES[piece.platform]} address of your post, starting with https://www.${manual.hosts[0]}/`,
+        `The link should be the ${PLATFORM_NAMES[piece.platform].replace(/ carousel$/, "")} address of your post, starting with https://www.${manual.hosts[0]}/`,
       );
     }
   }
@@ -736,6 +786,44 @@ export async function videoState(db: Db, pieceId: string, platform: VideoPlatfor
     renderKey: key,
     problem,
   };
+}
+
+/**
+ * A video you already filmed, without going through ideas and scenarios: the studio makes a small
+ * approved idea for it and one video post, ready for your clip. What you say, when you paste it,
+ * becomes the script, which helps the editor correct the captions.
+ */
+export async function startQuickVideo(
+  db: Db,
+  input: { language: Language; platform: string; title: string; script: string },
+): Promise<{ ideaId: string; pieceId: string; platform: VideoPlatform }> {
+  if (!isVideoPlatform(input.platform)) throw new StudioError("Choose where the video goes.");
+  const title = input.title.trim().slice(0, 100);
+  if (!title) throw new StudioError("Give the video a title, so you can find it again.");
+  const script = input.script
+    .split(/\n\s*\n/)
+    .map((part) => part.replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .slice(0, 40)
+    .map((say) => ({ say, show: "" }));
+  return db.transaction(async (tx) => {
+    const [idea] = await tx
+      .insert(ideas)
+      .values({ language: input.language, title, hook: "", angle: "", whyNow: "", pillar: "", sources: [], status: "approved" })
+      .returning({ id: ideas.id });
+    const scenario: ScenarioContent = { title, hook: "", mainPoints: [], angle: "", example: "", callToAction: "" };
+    await tx.insert(scenarios).values({ ideaId: idea.id, currentVersion: 1, approvedVersion: 1, channels: null });
+    await tx.insert(scenarioVersions).values({ ideaId: idea.id, version: 1, content: scenario, origin: "edit" });
+    const [piece] = await tx.insert(pieces).values({ ideaId: idea.id, platform: input.platform, currentVersion: 1 }).returning({ id: pieces.id });
+    await tx.insert(pieceVersions).values({
+      pieceId: piece.id,
+      version: 1,
+      content: { body: "", title, ...(script.length ? { script } : {}) },
+      origin: "edit",
+      scenarioVersion: 1,
+    });
+    return { ideaId: idea.id, pieceId: piece.id, platform: input.platform as VideoPlatform };
+  });
 }
 
 export async function ideaForContentPage(db: Db, ideaId: string) {

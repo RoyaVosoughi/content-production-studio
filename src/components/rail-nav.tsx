@@ -15,9 +15,9 @@ function switchHref(ui: UiLanguage, back: string) {
   return `/api/switch?${new URLSearchParams({ ui, back })}`;
 }
 
-export type SectionId = "ideas" | "team" | "results" | "brand" | "connections" | "setup";
+export type SectionId = "ideas" | "team" | "results" | "brand" | "connections" | "setup" | "guide" | "calendar" | "video";
 
-const OTHER_SECTIONS: SectionId[] = ["team", "results", "brand", "connections", "setup"];
+const OTHER_SECTIONS: SectionId[] = ["video", "team", "results", "brand", "connections", "setup", "guide", "calendar"];
 
 /** Which section a path belongs to, and whether it is that section's top page. */
 export function sectionOf(pathname: string, language: UiLanguage): { id: SectionId; top: boolean } {
@@ -28,13 +28,17 @@ export function sectionOf(pathname: string, language: UiLanguage): { id: Section
 }
 
 function sections(language: UiLanguage, t: Strings, ready: boolean) {
-  // Until Setup is saved, Setup is the only place to go. After that, Setup and Brand Kit are reached from the Agents page.
+  // Until Setup is saved, Setup is the only place to go. After that, Setup is reached from the Agents page.
   if (!ready) return [{ id: "setup" as SectionId, href: `/${language}/setup`, label: t.navSetup }];
   const all: { id: SectionId; href: string; label: string }[] = [
+    { id: "brand", href: `/${language}/brand`, label: t.navBrand },
     { id: "ideas", href: `/${language}`, label: t.navStudio },
+    { id: "video", href: `/${language}/video`, label: t.videoStudio.nav },
+    { id: "calendar", href: `/${language}/calendar`, label: t.navCalendar },
     { id: "team", href: `/${language}/team`, label: t.navTeam },
     { id: "results", href: `/${language}/results`, label: t.navResults },
     { id: "connections", href: `/${language}/connections`, label: t.navConnections },
+    { id: "guide", href: `/${language}/guide`, label: t.navGuide },
   ];
   return all;
 }

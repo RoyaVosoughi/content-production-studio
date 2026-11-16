@@ -6,22 +6,27 @@ import { after } from "next/server";
 import { isAgentId } from "@/lib/agents/roster";
 import * as samples from "@/lib/agents/editor/samples";
 import * as team from "@/lib/agents/team";
+import * as animation from "@/lib/animations";
 import * as content from "@/lib/content";
 import { getDb } from "@/lib/db/client";
 import type { EditPlan } from "@/lib/db/schema";
 import { savePhoto } from "@/lib/media";
 import { StudioError } from "@/lib/errors";
-import { isContentLanguage, isUiLanguage, type Language, type UiLanguage } from "@/lib/language";
+import { STRINGS } from "@/lib/i18n";
+import { isContentLanguage, isUiLanguage, uiLocale, type Language, type UiLanguage } from "@/lib/language";
 import { requireProfile, saveProfile, type Profile } from "@/lib/profile";
 import { brandFileText, proposeBrandKits, type BrandProposal } from "@/lib/brand-file";
-import { proposeInstructions, type InstructionsProposal } from "@/lib/instructions-file";
+import { INTERVIEW_QUESTIONS, interviewDocument, interviewIsEnough } from "@/lib/brand-interview";
+import * as skills from "@/lib/agents/skills";
+import { tailorSkill } from "@/lib/skill-tailor";
 import { VIEW_COOKIE } from "@/lib/view";
 import { cookies } from "next/headers";
 import { isPlatform } from "@/lib/platforms";
 import * as results from "@/lib/results";
+import { startScoutJob } from "@/lib/scout-job";
 import * as studio from "@/lib/studio";
 
-export type ActionState = { error?: string } | null;
+export type ActionState = { error?: string; /** A short result to show, such as how many posts were updated. */ notice?: string } | null;
 
 const MAX_REQUEST_LENGTH = 2000;
 
@@ -68,16 +73,17 @@ function messageFor(error: unknown): string {
   return "That didn't work, and nothing was changed. Please try again.";
 }
 
-async function perform(work: () => Promise<void>): Promise<ActionState> {
+async function perform(work: () => Promise<void | string>): Promise<ActionState> {
+  let notice: string | void;
   try {
-    await work();
+    notice = await work();
   } catch (error) {
     return { error: messageFor(error) };
   }
   revalidatePath("/", "layout");
   // Once enough feedback has built up, the coach turns it into lessons after your wait is over.
   after(studio.learnInBackground);
-  return null;
+  return notice ? { notice } : null;
 }
 
 /** The numbers you read off one live post. */
@@ -88,15 +94,61 @@ export async function saveResultsAction(_: ActionState, form: FormData) {
   });
 }
 
-export async function generateIdeasAction(_: ActionState, form: FormData) {
-  const state = await perform(async () => {
-    const focus = text(form, "focus");
-    if (focus.length > MAX_REQUEST_LENGTH) throw new StudioError("Please shorten your request.");
-    await studio.generateIdeas(await studio.defaultDeps(), languageFrom(form), focus);
+/** The interface language a form was sent from, for messages that name numbers. */
+const uiOf = (form: FormData) => (isUiLanguage(text(form, "ui")) ? (text(form, "ui") as UiLanguage) : "en");
+const countText = (template: string, ui: UiLanguage, values: Record<string, number>) =>
+  Object.entries(values).reduce((out, [key, value]) => out.replace(`{${key}}`, value.toLocaleString(uiLocale(ui))), template);
+
+/** Reads the numbers of live Instagram posts from Instagram. */
+export async function syncInstagramAction(_: ActionState, form: FormData) {
+  return perform(async () => {
+    if (!process.env.INSTAGRAM_ACCESS_TOKEN) throw new StudioError("Add INSTAGRAM_ACCESS_TOKEN to .env.local, then restart the app, to read numbers from Instagram.");
+    const { fetchInstagramNumbers } = await import("@/lib/publishers/instagram");
+    const report = await results.syncInstagramResults(await getDb(), fetchInstagramNumbers);
+    if (report.updated === 0 && report.failed > 0) throw new StudioError(report.firstError ?? "Instagram didn't answer.");
+    const ui = uiOf(form);
+    const r = STRINGS[ui].resultsSync;
+    return countText(report.failed ? r.doneSome : report.updated ? r.done : r.nothing, ui, { updated: report.updated, failed: report.failed });
   });
-  // From the box at the top of the studio, go straight to the new ideas in the scout's card.
-  if (!state && form.has("ui")) redirect(`/${uiFrom(form)}/map?agent=scout#agent-card`);
-  return state;
+}
+
+/** Saves the numbers from a LinkedIn analytics export onto the posts it matches. */
+export async function importLinkedInAction(_: ActionState, form: FormData) {
+  return perform(async () => {
+    const file = form.get("file");
+    if (!(file instanceof File) || file.size === 0) throw new StudioError("Choose the file LinkedIn gave you first.");
+    const { importLinkedInExport, MAX_IMPORT_BYTES } = await import("@/lib/linkedin-import");
+    if (file.size > MAX_IMPORT_BYTES) throw new StudioError("That file is too big. LinkedIn's export is usually well under 5 MB.");
+    const report = await importLinkedInExport(await getDb(), file.name, Buffer.from(await file.arrayBuffer()));
+    const ui = uiOf(form);
+    const r = STRINGS[ui].resultsSync;
+    if (report.updated === 0) throw new StudioError(countText(r.importNone, ui, { unmatched: report.unmatched, noViews: report.noViews }));
+    return countText(r.imported, ui, { updated: report.updated, unmatched: report.unmatched, noViews: report.noViews });
+  });
+}
+
+/**
+ * Starts the idea scout in the background and goes straight to its card, where you can watch it,
+ * stop it, or leave for any other page. "mode=topic" needs a topic; "mode=auto" searches your Brand Kit's topics.
+ */
+export async function generateIdeasAction(_: ActionState, form: FormData): Promise<ActionState> {
+  try {
+    const focus = text(form, "mode") === "auto" ? "" : text(form, "focus");
+    if (text(form, "mode") === "topic" && !focus) throw new StudioError("Write a topic or paste a link first.");
+    if (focus.length > MAX_REQUEST_LENGTH) throw new StudioError("Please shorten your request.");
+    const language = languageFrom(form);
+    const job = startScoutJob(
+      language,
+      async (stopIfAsked) =>
+        (await studio.generateIdeas(await studio.defaultDeps(), language, focus, stopIfAsked, { onlyMine: form.get("onlyMine") === "on" })).length,
+      messageFor,
+      () => void studio.learnInBackground(),
+    );
+    if (!job) throw new StudioError("The Idea Scout is still finishing its last search. Try again in a minute.");
+  } catch (error) {
+    return { error: messageFor(error) };
+  }
+  redirect(`/${uiFrom(form)}/map?agent=scout#agent-card`);
 }
 
 export async function refineIdeaAction(_: ActionState, form: FormData) {
@@ -283,6 +335,27 @@ export async function removePhotoAction(_: ActionState, form: FormData) {
   });
 }
 
+/** Saves the brand image of a LinkedIn post or an article. A photo, when chosen, goes behind the cover. */
+export async function saveImageAction(_: ActionState, form: FormData) {
+  return perform(async () => {
+    let image: Record<string, unknown>;
+    try {
+      image = JSON.parse(text(form, "image"));
+    } catch {
+      throw new StudioError("The image couldn't be read. Reload and try again.");
+    }
+    const file = form.get("photo");
+    if (file instanceof File && file.size > 0) image.photo = await savePhoto(file);
+    await content.setPieceImage(await getDb(), text(form, "pieceId"), versionFrom(form), image);
+  });
+}
+
+export async function removeImageAction(_: ActionState, form: FormData) {
+  return perform(async () => {
+    await content.setPieceImage(await getDb(), text(form, "pieceId"), versionFrom(form), null);
+  });
+}
+
 export async function changePieceAction(_: ActionState, form: FormData) {
   return perform(async () => {
     await content.changePieceWithAi(await studio.defaultDeps(), text(form, "pieceId"), versionFrom(form), requestFrom(form));
@@ -319,6 +392,27 @@ export async function schedulePostAction(_: ActionState, form: FormData) {
     const { parseLocalTime, schedulePost } = await import("@/lib/schedule");
     await schedulePost(await content.defaultPublishDeps(), text(form, "pieceId"), versionFrom(form), parseLocalTime(text(form, "at")));
   });
+}
+
+/** Your weekly posting pattern: the channels for each weekday, the time, and the days between one idea's posts. */
+export async function saveWeekPlanAction(_: ActionState, form: FormData) {
+  return perform(async () => {
+    const { saveWeekPlan } = await import("@/lib/calendar");
+    const days = Array.from({ length: 7 }, (_, day) => form.getAll(`day:${day}`).map(String));
+    await saveWeekPlan(await getDb(), { days, time: text(form, "time"), gapDays: Number(text(form, "gapDays")) });
+  });
+}
+
+/** Schedules every suggestion in the week on screen. */
+export async function scheduleWeekAction(_: ActionState, form: FormData) {
+  let problems: string[] = [];
+  const state = await perform(async () => {
+    const { scheduleWeek } = await import("@/lib/calendar");
+    const week = Math.max(0, Math.min(12, Number(text(form, "week")) || 0));
+    ({ problems } = await scheduleWeek(await content.defaultPublishDeps(), text(form, "language"), Number(text(form, "firstDay")) || 0, week));
+  });
+  if (state?.error || problems.length === 0) return state;
+  return { error: problems.join(" · ") };
 }
 
 export async function cancelScheduleAction(_: ActionState, form: FormData) {
@@ -374,8 +468,95 @@ export async function makeVideoAction(_: ActionState, form: FormData) {
   });
 }
 
-export async function saveBrandKitAction(_: ActionState, form: FormData) {
+// ---- Video studio ----
+
+/** A talking-head video you filmed, without an idea first: goes straight to its post, ready for the clip. */
+export async function quickVideoAction(_: ActionState, form: FormData) {
+  let to: string | null = null;
+  const state = await perform(async () => {
+    const language = languageFrom(form);
+    const made = await content.startQuickVideo(await getDb(), {
+      language,
+      platform: text(form, "platform"),
+      title: text(form, "title"),
+      script: String(form.get("script") ?? ""),
+    });
+    await showLanguage(language);
+    to = `/${uiFrom(form)}/ideas/${made.ideaId}/content#post-${made.platform}`;
+  });
+  if (!state && to) redirect(to);
+  return state;
+}
+
+/** An animation from a script: the scenes are planned, then you land on its page to check them. */
+export async function createAnimationAction(_: ActionState, form: FormData) {
+  let to: string | null = null;
+  const state = await perform(async () => {
+    const id = await animation.createAnimation(await studio.defaultDeps(), {
+      language: languageFrom(form),
+      platform: text(form, "platform"),
+      title: text(form, "title"),
+      script: String(form.get("script") ?? ""),
+      mode: text(form, "mode") === "simple" ? "simple" : "ai",
+    });
+    to = `/${uiFrom(form)}/video/${id}`;
+  });
+  if (!state && to) redirect(to);
+  return state;
+}
+
+export async function saveAnimationAction(_: ActionState, form: FormData) {
   return perform(async () => {
+    let scenes: unknown;
+    try {
+      scenes = JSON.parse(String(form.get("scenes") ?? "[]"));
+    } catch {
+      throw new StudioError("Reload the page and try again.");
+    }
+    if (!Array.isArray(scenes)) throw new StudioError("Reload the page and try again.");
+    await animation.saveAnimation(await getDb(), text(form, "id"), {
+      title: text(form, "title"),
+      platform: text(form, "platform"),
+      captions: form.get("captions") === "on",
+      scenes,
+    });
+  });
+}
+
+export async function replanAnimationAction(_: ActionState, form: FormData) {
+  return perform(async () => {
+    await animation.replanAnimation(await studio.defaultDeps(), text(form, "id"), text(form, "mode") === "simple" ? "simple" : "ai");
+  });
+}
+
+export async function makeAnimationAction(_: ActionState, form: FormData) {
+  return perform(async () => {
+    await animation.makeAnimation(await getDb(), text(form, "id"));
+  });
+}
+
+export async function removeNarrationAction(_: ActionState, form: FormData) {
+  return perform(async () => {
+    await animation.removeNarration(await getDb(), text(form, "id"));
+  });
+}
+
+export async function retryNarrationAction(_: ActionState, form: FormData) {
+  return perform(async () => {
+    await animation.retryNarration(await getDb(), text(form, "id"));
+  });
+}
+
+export async function deleteAnimationAction(_: ActionState, form: FormData) {
+  const state = await perform(async () => {
+    await animation.deleteAnimation(await getDb(), text(form, "id"));
+  });
+  if (!state) redirect(`/${uiFrom(form)}/video`);
+  return state;
+}
+
+export async function saveBrandKitAction(_: ActionState, form: FormData) {
+  const state = await perform(async () => {
     await studio.saveBrandKit(await getDb(), languageFrom(form), {
       positioning: text(form, "positioning"),
       audience: text(form, "audience"),
@@ -384,8 +565,12 @@ export async function saveBrandKitAction(_: ActionState, form: FormData) {
       avoid: text(form, "avoid"),
       samples: text(form, "samples"),
       searchTopics: lines(form, "searchTopics"),
+      sources: lines(form, "sources"),
     });
   });
+  // The form is rebuilt from the saved kit, so the "saved" note and the next step travel in the address.
+  if (!state && form.has("ui")) redirect(`/${uiFrom(form)}/brand?saved=1`);
+  return state;
 }
 
 export type BrandFileState = { error?: string; proposal?: BrandProposal; fileName?: string } | null;
@@ -398,9 +583,8 @@ export async function readBrandFileAction(_: BrandFileState, form: FormData): Pr
     const db = await getDb();
     const profile = await requireProfile(db);
     const text = await brandFileText(file);
-    const { claudeJson } = await import("@/lib/ai/claude");
-    const { openRouterJson } = await import("@/lib/ai/openrouter");
-    const proposal = await proposeBrandKits(process.env.ANTHROPIC_API_KEY ? claudeJson : openRouterJson, {
+    const { routedJson } = await import("@/lib/ai/routing");
+    const proposal = await proposeBrandKits(routedJson("setup"), {
       text,
       languages: profile.languages,
       ownerName: profile.name,
@@ -411,9 +595,30 @@ export async function readBrandFileAction(_: BrandFileState, form: FormData): Pr
   }
 }
 
+/** Turns the brand interview's answers into a Brand Kit proposal for each content language. Nothing is saved. */
+export async function interviewBrandAction(_: BrandFileState, form: FormData): Promise<BrandFileState> {
+  try {
+    const answers = Object.fromEntries(INTERVIEW_QUESTIONS.map((key) => [key, text(form, key)]));
+    if (!interviewIsEnough(answers)) {
+      throw new StudioError("Answer at least who you are, and who you write for or what about.");
+    }
+    const db = await getDb();
+    const profile = await requireProfile(db);
+    const { routedJson } = await import("@/lib/ai/routing");
+    const proposal = await proposeBrandKits(routedJson("setup"), {
+      text: interviewDocument(answers),
+      languages: profile.languages,
+      ownerName: profile.name,
+    });
+    return { proposal };
+  } catch (error) {
+    return { error: messageFor(error) };
+  }
+}
+
 /** Saves the Brand Kit for each content language in the form, and the "About you" text when one was sent. */
 export async function saveBrandSetupAction(_: ActionState, form: FormData) {
-  return perform(async () => {
+  const state = await perform(async () => {
     const db = await getDb();
     const profile = await requireProfile(db);
     for (const code of profile.languages) {
@@ -437,6 +642,8 @@ export async function saveBrandSetupAction(_: ActionState, form: FormData) {
       if (!general.both.trim()) await team.saveInstructions(db, team.GENERAL, { both: about, byLanguage: general.byLanguage });
     }
   });
+  if (!state && form.has("ui")) redirect(`/${uiFrom(form)}/brand?saved=1`);
+  return state;
 }
 
 // ---- Team ----
@@ -476,39 +683,54 @@ export async function learnNowAction(_: ActionState, form: FormData) {
 
 export async function saveInstructionsAction(_: ActionState, form: FormData) {
   return perform(async () => {
-    const agent = text(form, "agent");
-    if (!isAgentId(agent) && agent !== team.GENERAL) throw new StudioError("Unknown team member.");
+    // Only the rules for the whole team are saved here; each agent's own rules live in its Skill.
+    if (text(form, "agent") !== team.GENERAL) throw new StudioError("Each agent's own rules are now in its Skill.");
     // Each content language has its own box, named lang:<code>.
     const byLanguage = Object.fromEntries(
       [...form.keys()]
         .filter((key) => key.startsWith("lang:") && isContentLanguage(key.slice(5)))
         .map((key) => [key.slice(5), text(form, key)]),
     );
-    await team.saveInstructions(await getDb(), agent, { both: text(form, "both"), byLanguage });
+    await team.saveInstructions(await getDb(), team.GENERAL, { both: text(form, "both"), byLanguage });
   });
 }
 
-export type InstructionsFileState = { error?: string; proposal?: InstructionsProposal; fileName?: string } | null;
+// ---- Skills ----
 
-/** Reads an uploaded file and proposes one agent's instructions from it. Nothing is saved. */
-export async function readInstructionsFileAction(_: InstructionsFileState, form: FormData): Promise<InstructionsFileState> {
+function agentFrom(form: FormData) {
+  const agent = text(form, "agent");
+  if (!isAgentId(agent)) throw new StudioError("Unknown team member.");
+  return agent;
+}
+
+export async function saveSkillAction(_: ActionState, form: FormData) {
+  return perform(async () => {
+    await skills.saveSkill(await getDb(), agentFrom(form), String(form.get("skill") ?? ""));
+  });
+}
+
+export async function resetSkillAction(_: ActionState, form: FormData) {
+  return perform(async () => {
+    await skills.resetSkill(await getDb(), agentFrom(form));
+  });
+}
+
+export type SkillDraftState = { error?: string; skill?: string; changes?: string; at?: number } | null;
+
+/** Asks the AI to fit the Skill on screen to your Brand Kit. Nothing is saved until you save it. */
+export async function tailorSkillAction(_: SkillDraftState, form: FormData): Promise<SkillDraftState> {
   try {
-    const agent = text(form, "agent");
-    if (!isAgentId(agent)) throw new StudioError("Unknown team member.");
-    const file = form.get("instructionsFile");
-    if (!(file instanceof File)) throw new StudioError("Choose a file first.");
+    const agent = agentFrom(form);
+    const current = String(form.get("skill") ?? "").trim();
+    if (!current) throw new StudioError("Write or reset the Skill first.");
     const db = await getDb();
     const profile = await requireProfile(db);
-    const [fileText, current] = await Promise.all([brandFileText(file), team.getInstructions(db, agent)]);
-    const { claudeJson } = await import("@/lib/ai/claude");
-    const { openRouterJson } = await import("@/lib/ai/openrouter");
-    const proposal = await proposeInstructions(process.env.ANTHROPIC_API_KEY ? claudeJson : openRouterJson, {
-      agent,
-      text: fileText,
-      ownerName: profile.name,
-      current: { both: current.both, byLanguage: current.byLanguage },
-    });
-    return { proposal, fileName: file.name };
+    const brand = await studio.getBrandKit(db, languageFrom(form));
+    if (brand.isDraft) throw new StudioError("Save your Brand Kit first, so there is a brand to fit the Skill to.");
+    const { routedJson } = await import("@/lib/ai/routing");
+    const noteLanguage = uiFrom(form) === "fa" ? "Farsi (Persian)" : "English";
+    const draft = await tailorSkill(routedJson("setup"), { agent, current, brand, ownerName: profile.name, noteLanguage });
+    return { ...draft, at: Date.now() };
   } catch (error) {
     return { error: messageFor(error) };
   }

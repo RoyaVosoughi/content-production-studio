@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { AiSection } from "@/components/ai-section";
 import type { Strings } from "@/lib/i18n";
 import type { UiLanguage } from "@/lib/language";
 import { platformLabel, type Platform } from "@/lib/platforms";
@@ -16,7 +17,7 @@ type Health = "connected" | "notSetUp" | "needsAttention";
 
 export default async function ConnectionsPage({ params }: { params: Promise<{ lang: string }> }) {
   const { lang: param } = await params;
-  const { ui: lang, t, profile } = await readyPage(param);
+  const { ui: lang, t, profile, db } = await readyPage(param);
 
   const token = Boolean(process.env.TELEGRAM_BOT_TOKEN);
   const instagramReady = PUBLISHERS.instagram.missingSettings().length === 0;
@@ -43,6 +44,7 @@ export default async function ConnectionsPage({ params }: { params: Promise<{ la
       <p className="mt-3 max-w-xl text-ink-soft">{t.connectionsIntro}</p>
 
       <div className="mt-6 space-y-4">
+        <AiSection db={db} ui={lang} t={t} />
         <Card platform="telegram" health={telegramHealth} help={t.telegramHelp} problem={telegram?.problem} language={lang} t={t}>
           {telegram?.botName && <Fact label={t.botLabel} value={telegram.botName} />}
           {telegram?.channelName && <Fact label={t.channelLabel} value={telegram.channelName} />}

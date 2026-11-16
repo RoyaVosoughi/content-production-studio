@@ -4,6 +4,9 @@ import type { Profile } from "../profile";
 
 export type Published = { externalId: string | null; url: string | null };
 
+/** The brand image that goes out with a LinkedIn post or an article, as a JPEG. */
+export type PostedImage = { jpeg: Buffer; alt: string; width: number; height: number };
+
 /**
  * The platform definitely did not publish, so posting again is safe.
  * Any other error means the outcome is unknown, and you check before anything is sent again.
@@ -20,6 +23,8 @@ export interface Publisher {
     key: string;
     /** The slide images, made only for platforms that post them. */
     images: () => Promise<Buffer[]>;
+    /** The post's brand image, drawn only when a platform sends it. Null when the post has none. */
+    image?: () => Promise<PostedImage | null>;
     /** Who is posting, for the website's article address. */
     profile?: Pick<Profile, "websiteUrl" | "blogPath"> | null;
   }): Promise<Published>;

@@ -66,6 +66,7 @@ beforeEach(async () => {
     writePiece: vi.fn(),
     revisePiece: vi.fn(),
     planEdit: vi.fn(),
+    planAnimation: vi.fn(),
     ...passingTeam(),
   };
   search = vi.fn(async () => [RESULT]);
@@ -86,7 +87,7 @@ async function approvedIdeaWithScenario() {
 describe("language button", () => {
   it("uses the selected language's Brand Kit from search through writing", async () => {
     const [idea] = await generateIdeas(deps, "fa", "");
-    expect(search).toHaveBeenCalledWith(BRAND_SEED.fa.searchTopics);
+    expect(search).toHaveBeenCalledWith(BRAND_SEED.fa.searchTopics, undefined);
     expect(writer.generateIdeas.mock.calls[0][0].language).toBe("fa");
     expect(idea.language).toBe("fa");
 

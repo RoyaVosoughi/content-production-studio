@@ -1,6 +1,7 @@
 import { articleUrl } from "../profile";
+import { uploadPublicImage } from "./storage";
 import { missingSupabase, supabaseHeaders, supabaseUrl } from "./supabase";
-import { PublishRejected, REQUEST_TIMEOUT_MS, type Publisher } from "./types";
+import { PublishRejected, REQUEST_TIMEOUT_MS, type PostedImage, type Publisher } from "./types";
 
 // Articles reach the website one of two ways, chosen in .env.local:
 //
@@ -10,6 +11,9 @@ import { PublishRejected, REQUEST_TIMEOUT_MS, type Publisher } from "./types";
 //   language. The table is blog_posts unless WEBSITE_SUPABASE_TABLE names another.
 //
 // When both are set, the webhook is used.
+//
+// An article's brand image goes to your Supabase storage, when Supabase is set up, so the website can
+// show it from a public address. A webhook also receives the image itself, so it works without Supabase.
 
 type Mode = "webhook" | "supabase";
 
@@ -19,6 +23,16 @@ export function websiteMode(): Mode {
 
 const TABLE_NAME = /^[a-z_][a-z0-9_]*$/i;
 const tableName = () => process.env.WEBSITE_SUPABASE_TABLE || "blog_posts";
+const imageColumn = () => process.env.WEBSITE_SUPABASE_IMAGE_COLUMN || "cover_image";
+
+/** Puts the image in public storage, before anything is posted, and returns its address. */
+async function publicCover(key: string, image: PostedImage): Promise<string> {
+  try {
+    return await uploadPublicImage(`articles/${key}.jpg`, image.jpeg);
+  } catch (error) {
+    throw new PublishRejected(`${error instanceof Error ? error.message : "The image upload failed."} Nothing was posted.`);
+  }
+}
 const table = () => `${supabaseUrl()}/rest/v1/${tableName()}`;
 
 function webhookHeaders(key: string): Record<string, string> {
@@ -31,9 +45,12 @@ function webhookHeaders(key: string): Record<string, string> {
   };
 }
 
-const webhookPublisher: Publisher["publish"] = async ({ language, content, key, profile }) => {
+const webhookPublisher: Publisher["publish"] = async ({ language, content, key, profile, image }) => {
   const slug = content.slug as string;
   const expected = profile ? articleUrl(profile, language, slug) : null;
+  const picture = image ? await image() : null;
+  // The webhook gets the image itself too, so a storage problem only leaves out the public address.
+  const pictureUrl = picture && missingSupabase().length === 0 ? await publicCover(key, picture).catch(() => null) : null;
   let response: Response;
   try {
     response = await fetch(process.env.WEBSITE_WEBHOOK_URL as string, {
@@ -49,6 +66,16 @@ const webhookPublisher: Publisher["publish"] = async ({ language, content, key, 
         body_markdown: content.body,
         tags: content.tags ?? [],
         url: expected,
+        image: picture
+          ? {
+              url: pictureUrl,
+              alt: picture.alt,
+              width: picture.width,
+              height: picture.height,
+              content_type: "image/jpeg",
+              data_base64: picture.jpeg.toString("base64"),
+            }
+          : null,
         published_at: new Date().toISOString(),
       }),
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
@@ -73,8 +100,9 @@ const webhookPublisher: Publisher["publish"] = async ({ language, content, key, 
   return { externalId: reply?.id != null ? String(reply.id) : null, url };
 };
 
-const supabasePublisher: Publisher["publish"] = async ({ language, content, profile }) => {
+const supabasePublisher: Publisher["publish"] = async ({ language, content, profile, key, image }) => {
   if (!TABLE_NAME.test(tableName())) throw new PublishRejected("WEBSITE_SUPABASE_TABLE can only use letters, numbers and _.");
+  if (!TABLE_NAME.test(imageColumn())) throw new PublishRejected("WEBSITE_SUPABASE_IMAGE_COLUMN can only use letters, numbers and _.");
   const slug = content.slug as string;
   const url = profile ? articleUrl(profile, language, slug) : null;
 
@@ -101,6 +129,8 @@ const supabasePublisher: Publisher["publish"] = async ({ language, content, prof
     throw new PublishRejected(`The web address "${slug}" is already used by another article. Change it and try again.`);
   }
 
+  const picture = image ? await image() : null;
+  const pictureUrl = picture ? await publicCover(key, picture) : null;
   const now = new Date().toISOString();
   const response = await fetch(table(), {
     method: "POST",
@@ -115,6 +145,7 @@ const supabasePublisher: Publisher["publish"] = async ({ language, content, prof
       status: "published",
       published_at: now,
       updated_at: now,
+      ...(pictureUrl && { [imageColumn()]: pictureUrl }),
     }),
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
@@ -123,7 +154,13 @@ const supabasePublisher: Publisher["publish"] = async ({ language, content, prof
     throw new PublishRejected(`The web address "${slug}" is already used by another article. Change it and try again.`);
   }
   if (!response.ok) {
-    throw new PublishRejected(`The website refused the article (error ${response.status}): ${(await response.text()).slice(0, 300)}`);
+    const reply = (await response.text()).slice(0, 300);
+    if (pictureUrl && reply.includes(imageColumn())) {
+      throw new PublishRejected(
+        `The ${tableName()} table has no ${imageColumn()} column for the image. Add it (see README.md), or remove the image. Nothing was posted.`,
+      );
+    }
+    throw new PublishRejected(`The website refused the article (error ${response.status}): ${reply}`);
   }
   const [row] = (await response.json()) as { id: string }[];
   return { externalId: row?.id ?? null, url };

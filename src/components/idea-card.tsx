@@ -87,17 +87,31 @@ export function ProposedIdeaCard({
   ui,
   language,
   verdict,
+  repeats,
   t,
 }: {
   idea: CardIdea;
   ui: UiLanguage;
   language: Language;
   verdict?: Parameters<typeof ManagerNote>[0]["verdict"];
+  /** A published idea this one looks like, found by comparing words. */
+  repeats?: { id: string; title: string } | null;
   t: Strings;
 }) {
   return (
     <article className="rounded-xl bg-paper p-5 md:p-6">
       <IdeaBody idea={idea} t={t} language={language} />
+      {repeats && (
+        <div data-repeat role="note" className="mt-4 rounded-lg border-s-4 border-amber bg-canvas p-3 text-sm">
+          <p>
+            <span className="font-semibold">{t.repeatWarning}</span>{" "}
+            <Link href={`/${ui}/ideas/${repeats.id}/content`} className="font-medium text-cobalt underline-offset-4 hover:underline">
+              <bdi>{repeats.title}</bdi>
+            </Link>
+          </p>
+          <p className="mt-1 text-ink-soft">{t.repeatHint}</p>
+        </div>
+      )}
       <div className="mt-4">
         <ManagerNote verdict={verdict} language={ui} t={t} />
       </div>

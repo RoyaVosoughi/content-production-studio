@@ -31,6 +31,7 @@ import {
 import { hasPlaceholder } from "@/lib/scenario";
 import { ActionForm, SubmitButton } from "./action-form";
 import { PiecePreview, type PreviewBrand } from "./piece-preview";
+import { PostImageEditor } from "./post-image-editor";
 
 export type EditorPiece = {
   id: string;
@@ -151,6 +152,17 @@ export function PieceEditor({
               </SubmitButton>
             </ActionForm>
             {platform === "instagram" && <CoverPhoto hidden={hidden} photo={content.photo} dirty={dirty} t={t} />}
+            {(platform === "linkedin" || platform === "website") && (
+              <PostImageEditor
+                platform={platform}
+                content={piece.content}
+                hidden={hidden}
+                dirty={dirty}
+                language={contentLanguage}
+                brand={brand.slides}
+                t={t}
+              />
+            )}
           </div>
         )}
       </div>
@@ -180,6 +192,7 @@ export function PieceEditor({
               pieceId={piece.id}
               version={piece.version}
               slideCount={content.slides?.length ?? 0}
+              hasImage={Boolean(content.image) && (platform === "linkedin" || platform === "website")}
               hidden={hidden}
               body={content.body}
               blocked={dirty || placeholder || problem !== null}
@@ -430,6 +443,7 @@ function ManualPost({
   pieceId,
   version,
   slideCount,
+  hasImage,
   hidden,
   body,
   blocked,
@@ -440,6 +454,7 @@ function ManualPost({
   pieceId: string;
   version: number;
   slideCount: number;
+  hasImage: boolean;
   hidden: React.ReactNode;
   body: string;
   blocked: boolean;
@@ -500,6 +515,15 @@ function ManualPost({
             </a>
           ))}
         </div>
+      )}
+      {hasImage && !blocked && (
+        <a
+          href={`/api/post-image/${pieceId}?v=${version}`}
+          download
+          className="inline-block rounded-md border border-mist bg-paper px-2.5 py-1 font-medium text-cobalt underline-offset-2 hover:underline"
+        >
+          {t.postImage.download}
+        </a>
       )}
       <ActionForm action={markPostedByHandAction} className="space-y-2">
         {hidden}

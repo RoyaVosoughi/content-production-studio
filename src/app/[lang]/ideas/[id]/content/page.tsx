@@ -5,6 +5,7 @@ import { ActionForm, SubmitButton } from "@/components/action-form";
 import { IdeaMap } from "@/components/idea-map";
 import { ManagerNote } from "@/components/manager-note";
 import { PieceEditor } from "@/components/piece-editor";
+import { PostTabs, type PostTab } from "@/components/post-tabs";
 import { RemovePiece } from "@/components/remove-piece";
 import { latestVerdicts } from "@/lib/agents/team";
 import { VideoEditor, type EditorVideo } from "@/components/video-editor";
@@ -14,9 +15,12 @@ import { languageName, textDirection, type Language } from "@/lib/language";
 import { articleUrl, displayName, headline, instagramLabel } from "@/lib/profile";
 import { slideBrand } from "@/lib/slides";
 import { readyPage } from "@/lib/view";
+import { Stepper } from "@/components/stepper";
+import { studioProgress } from "@/lib/progress";
 import { isPlatform, isVideoPlatform, platformLabel, PLATFORMS, TEXT_PLATFORMS, VIDEO_PLATFORMS, type Platform } from "@/lib/platforms";
 import { PUBLISHERS } from "@/lib/publishers";
 import { getScenario, getSibling } from "@/lib/studio";
+import { channelOrder } from "@/lib/channels";
 import { localTimeValue, schedulesFor, type Schedule } from "@/lib/schedule";
 import { scheduleLabel } from "@/lib/schedule-time";
 
@@ -102,32 +106,61 @@ export default async function ContentPage({ params }: { params: Promise<{ lang: 
       }),
   );
 
-  return (
-    <>
-      <Link href={`/${lang}/ideas/${id}`} className="text-sm font-medium text-cobalt underline-offset-4 hover:underline">
-        {t.backToScenario}
-      </Link>
-      <IdeaMap db={db} ui={lang} t={t} languages={contentLanguages} view={view} idea={idea} sibling={sibling} here="content" />
-
-      <h1 className="mt-6 font-display text-3xl font-semibold">{t.contentTitle}</h1>
-      <p className="mt-1 font-medium text-ink-soft" lang={language} dir={textDirection(language)}>
-        {idea.title}
-      </p>
-      <p className="mt-3 max-w-xl text-ink-soft">{t.contentIntro}</p>
-
-      {!ready && pieces.length === 0 ? (
-        <p role="status" className="mt-6 rounded-lg border-s-4 border-amber bg-paper p-4 text-sm">
-          {t.contentNotReady}
-        </p>
-      ) : (
-        ready &&
-        available.length > 0 && (
-          <ActionForm action={createPiecesAction} className="mt-6 rounded-xl bg-paper p-5 md:p-6">
+  const steps = await studioProgress(db, lang, view);
+  const canAdd = ready && available.length > 0;
+  const addForm = (
+          <ActionForm action={createPiecesAction} className="rounded-xl bg-paper p-5 md:p-6">
             <input type="hidden" name="ideaId" value={id} />
             <input type="hidden" name="ui" value={lang} />
             <fieldset>
               <legend className="font-display text-lg font-semibold">{t.choosePlatforms}</legend>
-              {[
+              {scenario?.channels?.length ? (
+                <>
+                  <p className="mt-1 text-sm text-ink-soft">{t.channelAdviceHint}</p>
+                  <div className="mt-3 grid gap-2">
+                    {channelOrder(scenario.channels)
+                      .filter((platform) => available.includes(platform))
+                      .map((platform) => {
+                        const pick = scenario.channels?.find((item) => item.platform === platform);
+                        return (
+                          <label
+                            key={platform}
+                            className={`flex items-start gap-3 rounded-lg border p-3 ${pick?.recommended ? "border-cobalt" : "border-mist"}`}
+                          >
+                            <input
+                              type="checkbox"
+                              name="platforms"
+                              value={platform}
+                              defaultChecked={pick?.recommended ?? false}
+                              className="mt-1 size-4 shrink-0 accent-cobalt"
+                            />
+                            <span className="min-w-0">
+                              <span className="flex flex-wrap items-center gap-2 font-medium">
+                                {platformLabel(platform, lang)}
+                                {pick && (
+                                  <span className="label" aria-label={t.channelFit.replace("{score}", String(pick.score))}>
+                                    {"●".repeat(pick.score)}
+                                    <span className="opacity-30">{"●".repeat(5 - pick.score)}</span>
+                                  </span>
+                                )}
+                                {pick?.recommended && (
+                                  <span className="rounded-full bg-cobalt/20 px-2 py-0.5 text-xs font-semibold text-periwinkle">
+                                    {t.channelRecommended}
+                                  </span>
+                                )}
+                              </span>
+                              {pick?.angle && (
+                                <span className="mt-0.5 block text-sm text-ink-soft" lang={language} dir={textDirection(language)}>
+                                  {pick.angle}
+                                </span>
+                              )}
+                            </span>
+                          </label>
+                        );
+                      })}
+                  </div>
+                </>
+              ) : [
                 { label: t.groupPosts, hint: null, platforms: TEXT_PLATFORMS as readonly Platform[] },
                 { label: t.groupVideos, hint: t.groupVideosHint, platforms: VIDEO_PLATFORMS as readonly Platform[] },
               ].map((group) => {
@@ -189,11 +222,45 @@ export default async function ContentPage({ params }: { params: Promise<{ lang: 
               </SubmitButton>
             </div>
           </ActionForm>
-        )
-      )}
+  );
+  return (
+    <>
+      <Stepper steps={steps} here="posts" t={t} />
+      <Link href={`/${lang}/ideas/${id}`} className="text-sm font-medium text-cobalt underline-offset-4 hover:underline">
+        {t.backToScenario}
+      </Link>
+      <details className="mt-4">
+        <summary className="cursor-pointer text-sm font-medium text-ink-soft hover:text-cobalt">{t.showIdeaMap}</summary>
+        <IdeaMap db={db} ui={lang} t={t} languages={contentLanguages} view={view} idea={idea} sibling={sibling} here="content" />
+      </details>
 
-      <div className="mt-6 space-y-5">
-        {editors.map(({ piece, platform, other, video }) => {
+      <h1 className="mt-6 font-display text-3xl font-semibold">{t.contentTitle}</h1>
+      <p className="mt-1 font-medium text-ink-soft" lang={language} dir={textDirection(language)}>
+        {idea.title}
+      </p>
+      <p className="mt-3 max-w-xl text-ink-soft">{t.contentIntro}</p>
+
+      {!ready && pieces.length === 0 && (
+        <p role="status" className="mt-6 rounded-lg border-s-4 border-amber bg-paper p-4 text-sm">
+          {t.contentNotReady}
+        </p>
+      )}
+      {canAdd && editors.length === 0 && addForm}
+
+      {editors.length > 0 && (
+        <PostTabs
+          label={t.contentTitle}
+          tabs={[
+            ...editors.map(({ piece, platform }) => {
+              const state = publishState(piece.publication);
+              const tone: PostTab["tone"] =
+                state === "posted" ? "posted" : schedules.get(piece.id)?.status === "waiting" ? "scheduled" : "draft";
+              return { key: platform, label: platformLabel(platform, lang), tone };
+            }),
+            ...(canAdd ? [{ key: "add", label: t.addChannels, tone: "add" as const }] : []),
+          ]}
+          panels={[
+            ...editors.map(({ piece, platform, other, video }) => {
           const editorPiece = {
             id: piece.id,
             platform,
@@ -242,8 +309,11 @@ export default async function ContentPage({ params }: { params: Promise<{ lang: 
               />
             </div>
           );
-        })}
-      </div>
+            }),
+            ...(canAdd ? [addForm] : []),
+          ]}
+        />
+      )}
     </>
   );
 }

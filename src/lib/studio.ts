@@ -1,19 +1,17 @@
+import { cleanSources, parseSources, pickFeedItems, readFeeds, type FetchText } from "./sources";
+import { cleanChannelPicks } from "./channels";
+import { allSkills } from "./agents/skills";
 import { and, desc, eq, ne, sql } from "drizzle-orm";
 import {
   describeEdit,
-  getTeamSettings,
   learnFromFeedback,
   instructionsFor,
   lessonsFor,
-  managerCheck,
-  PASS_SCORE,
   recordOwnerFeedback,
   recordSignal,
-  saveVerdict,
-  type Verdict,
 } from "./agents/team";
 import { tavilySearch } from "./ai/tavily";
-import type { IdeaDraft, IdeaText, SearchProvider, WritingContext, WritingModel } from "./ai/types";
+import type { IdeaText, SearchProvider, WritingContext, WritingModel } from "./ai/types";
 import { studioWriter } from "./ai/writer";
 import { emptyBrandKit, type BrandKitFields } from "./brand-seed";
 import { getDb, type Db } from "./db/client";
@@ -22,21 +20,31 @@ import {
   ideas,
   scenarios,
   scenarioVersions,
+  scoutRuns,
+  type ChannelPick,
   type IdeaSource,
+  type ScoutLook,
   type ScenarioContent,
 } from "./db/schema";
 import { StudioError } from "./errors";
 import { otherLanguage, type Language } from "./language";
 import { getProfile, requireProfile } from "./profile";
-import { performanceBrief } from "./results";
+import { performanceBrief, performancePatterns } from "./results";
 import { hasPlaceholder } from "./scenario";
 
-export const IDEA_BATCH_SIZE = 10;
+/** Five strong ideas a run: fewer AI words to write and check, and fewer to read through. */
+export const IDEA_BATCH_SIZE = 5;
 const MAX_SEARCH_QUERIES = 4;
 const PAST_TITLES_LIMIT = 100;
 const STALE_SCENARIO = "This scenario changed since you opened it. Reload and review the latest version.";
 
-export type StudioDeps = { db: Db; writer: WritingModel; searcher: SearchProvider };
+export type StudioDeps = {
+  db: Db;
+  writer: WritingModel;
+  searcher: SearchProvider;
+  /** Reads an RSS feed; the real web unless a test passes its own. */
+  fetchFeed?: FetchText;
+};
 
 export async function defaultDeps(): Promise<StudioDeps> {
   return { db: await getDb(), writer: studioWriter, searcher: tavilySearch };
@@ -51,11 +59,12 @@ export async function getBrandKit(db: Db, language: Language) {
   return kit;
 }
 
-export async function saveBrandKit(db: Db, language: Language, fields: BrandKitFields) {
+export async function saveBrandKit(db: Db, language: Language, fields: BrandKitFields & { sources?: string[] }) {
   await getBrandKit(db, language);
+  const { sources, ...kit } = fields;
   await db
     .update(brandKits)
-    .set({ ...fields, isDraft: false, updatedAt: new Date() })
+    .set({ ...kit, ...(sources ? { sources: cleanSources(sources) } : {}), isDraft: false, updatedAt: new Date() })
     .where(eq(brandKits.language, language));
 }
 
@@ -71,6 +80,7 @@ export async function writingContext(db: Db, language: Language): Promise<Writin
     brand: { positioning, audience, pillars, voiceGuide, avoid, samples, searchTopics },
     lessons: await lessonsFor(db, language),
     instructions: await instructionsFor(db, language),
+    skills: await allSkills(db),
   };
 }
 
@@ -112,13 +122,24 @@ async function adaptIdeasOrFail(writer: WritingModel, context: WritingContext, s
   return adapted;
 }
 
-export async function generateIdeas({ db, writer, searcher }: StudioDeps, language: Language, focus: string) {
+/**
+ * Finds a batch of ideas. `stopIfAsked` is called between the slow steps; when you stop the search
+ * it throws, so nothing is saved. Everything is saved at the very end, in one go.
+ */
+export async function generateIdeas(
+  { db, writer, searcher, fetchFeed }: StudioDeps,
+  language: Language,
+  focus: string,
+  stopIfAsked: () => void = () => {},
+  { onlyMine = false }: { onlyMine?: boolean } = {},
+) {
   const profile = await requireProfile(db);
   if (!profile.languages.includes(language)) throw new StudioError("Choose one of your content languages first.");
   const context = await writingContext(db, language);
   // What you asked for can hold links (a post, an article, a page); the scout reads them first.
   const { request, links } = splitLinks(focus);
   const shared = links.length && searcher.read ? await searcher.read(links) : { pages: [], failed: links };
+  stopIfAsked();
   if (links.length > 0 && shared.pages.length === 0 && !request) {
     throw new StudioError(
       "The link couldn't be opened. Instagram and LinkedIn often hide posts from outside readers, so paste the post's text instead, or add a few words about what you want.",
@@ -126,15 +147,38 @@ export async function generateIdeas({ db, writer, searcher }: StudioDeps, langua
   }
 
   const queries = [...(request ? [request] : []), ...context.brand.searchTopics].slice(0, MAX_SEARCH_QUERIES);
-  if (queries.length === 0 && shared.pages.length === 0) {
+  const { domains, feeds } = parseSources((await getBrandKit(db, language)).sources);
+  if (onlyMine && domains.length === 0 && feeds.length === 0) {
+    throw new StudioError("Add your sources to the Brand Kit first, or untick \"Only my sources\".");
+  }
+  if (queries.length === 0 && shared.pages.length === 0 && feeds.length === 0) {
     throw new StudioError("Add at least one search topic to the Brand Kit.");
   }
-  const found = queries.length ? await searcher.search(queries) : [];
-  const sharedUrls = new Set(shared.pages.map((page) => page.url));
-  const results = [...shared.pages, ...found.filter((result) => !sharedUrls.has(result.url))];
+  // With only your sources, the web search is limited to your sites, and skipped when you have only feeds.
+  const searched = queries.length > 0 && (!onlyMine || domains.length > 0) ? queries : [];
+  const [found, read] = await Promise.all([
+    searched.length ? searcher.search(searched, onlyMine ? { domains } : undefined) : Promise.resolve([]),
+    feeds.length ? readFeeds(feeds, fetchFeed) : Promise.resolve({ items: [], report: [] }),
+  ]);
+  stopIfAsked();
+  const feedItems = pickFeedItems(read.items, [request, ...context.brand.searchTopics]);
+  const seen = new Set<string>();
+  const results = [...shared.pages, ...found, ...feedItems].filter((result) => !seen.has(result.url) && seen.add(result.url));
   if (results.length === 0) {
-    throw new StudioError("The search found nothing recent. Try asking for something else or change your search topics.");
+    throw new StudioError(
+      onlyMine
+        ? "Your sources had nothing recent on this. Untick \"Only my sources\" to search the whole web, or add more sources."
+        : "The search found nothing recent. Try asking for something else or change your search topics.",
+    );
   }
+  const looked: ScoutLook = {
+    onlyMine,
+    queries: searched,
+    domains: onlyMine ? domains : [],
+    feeds: read.report,
+    links: shared.pages.map((page) => page.url),
+    results: results.length,
+  };
 
   const past = await db
     .select({ title: ideas.title })
@@ -145,6 +189,7 @@ export async function generateIdeas({ db, writer, searcher }: StudioDeps, langua
 
   // What went well once live, so the scout can build on it.
   const performance = await performanceBrief(db, language);
+  const patterns = await performancePatterns(db);
   const brief = {
     count: IDEA_BATCH_SIZE,
     focus: request,
@@ -153,16 +198,20 @@ export async function generateIdeas({ db, writer, searcher }: StudioDeps, langua
     pastTitles: past.map((idea) => idea.title),
     today: new Date().toISOString().slice(0, 10),
     performance: performance.map(({ number, title, pillar, results }) => ({ number, title, pillar, results })),
+    patterns,
   };
   const first = await writer.generateIdeas(context, brief);
   if (first.length === 0) throw new StudioError("No ideas came back. Please try again.");
-  const { drafts, verdicts } = await checkIdeas({ db, writer }, context, brief, first.slice(0, IDEA_BATCH_SIZE));
+  stopIfAsked();
+  // You check the ideas yourself, so the manager spends no requests on them.
+  const drafts = first.slice(0, IDEA_BATCH_SIZE);
 
   // A source is kept only if the search really returned it, so a made-up link can't appear as evidence.
   const known = new Map(results.map((result) => [result.url, result]));
   const batch = drafts.slice(0, IDEA_BATCH_SIZE);
   const second = otherLanguage(language, profile.languages);
   const adapted = second ? await adaptIdeasOrFail(writer, await writingContext(db, second), batch.map(ideaText)) : [];
+  stopIfAsked();
 
   // With two languages both are saved together, so an idea can never exist in only one of them.
   const rows = batch.flatMap((draft, index) => {
@@ -179,75 +228,8 @@ export async function generateIdeas({ db, writer, searcher }: StudioDeps, langua
   });
   const saved = await db.insert(ideas).values(rows).returning();
   const own = saved.filter((idea) => idea.language === language);
-  for (const [index, idea] of own.entries()) {
-    await saveVerdict(db, { agent: "scout", task: "idea", language, subject: idea.pairId }, verdicts[index] ?? null);
-  }
+  await db.insert(scoutRuns).values({ language, looked, ideas: own.length });
   return own;
-}
-
-/**
- * The manager scores the scout's batch. If some ideas are weak, the scout replaces just those once,
- * keeping the rest. A failed check or rewrite keeps the first batch, so it never costs you your ideas.
- */
-async function checkIdeas(
-  { db, writer }: Pick<StudioDeps, "db" | "writer">,
-  context: WritingContext,
-  brief: Parameters<WritingModel["generateIdeas"]>[1],
-  drafts: IdeaDraft[],
-): Promise<{ drafts: IdeaDraft[]; verdicts: (Verdict | null)[] }> {
-  const { managerEnabled } = await getTeamSettings(db);
-  if (!managerEnabled) return { drafts, verdicts: [] };
-  let review;
-  try {
-    review = await writer.reviewIdeas(context, { ideas: drafts, results: brief.results, pastTitles: brief.pastTitles });
-  } catch (error) {
-    console.error("The manager couldn't check the ideas:", error);
-    return { drafts, verdicts: [] };
-  }
-  const items = drafts.map((_, index) => review.ideas.find((item) => item.number === index + 1));
-  const verdicts: Verdict[] = items.map((item) => {
-    if (!item) return { score: null, revised: false, problems: [], note: { en: "", fa: "" } };
-    const score = Math.min(10, Math.max(1, Math.round(item.score)));
-    return { score, revised: false, problems: item.problem ? [item.problem] : [], note: { en: item.noteEn, fa: item.noteFa } };
-  });
-  const weak = verdicts.flatMap((verdict, index) => (verdict.score != null && verdict.score < PASS_SCORE ? [index] : []));
-  if (weak.length === 0) return { drafts, verdicts };
-
-  const problems = weak.map((index) => `Idea ${index + 1}: ${verdicts[index].problems[0] || "too weak to show {OWNER}"}`);
-  await recordSignal(db, {
-    agent: "scout",
-    language: context.language,
-    kind: "manager",
-    detail: `The manager sent back ${weak.length} of ${drafts.length} ideas. ${problems.join(" | ")}`,
-  });
-  try {
-    const second = await writer.generateIdeas(context, {
-      ...brief,
-      count: drafts.length,
-      feedback: { previous: drafts, problems, instructions: review.instructions },
-    });
-    // The rewrite must keep the batch's shape, or the manager's notes would land on the wrong ideas.
-    if (second.length !== drafts.length) return { drafts, verdicts };
-    const replaced = second.map((idea, index) => (weak.includes(index) ? idea : drafts[index]));
-    return {
-      drafts: replaced,
-      verdicts: verdicts.map((verdict, index) =>
-        weak.includes(index)
-          ? {
-              ...verdict,
-              revised: true,
-              note: {
-                en: "The manager sent the first version back, so this is the scout's replacement.",
-                fa: "مدیر نسخه‌ی اول را برگرداند، برای همین این ایده‌ی جایگزین است.",
-              },
-            }
-          : verdict,
-      ),
-    };
-  } catch (error) {
-    console.error("The scout couldn't replace the weak ideas:", error);
-    return { drafts, verdicts };
-  }
 }
 
 export async function reviseIdea({ db, writer }: StudioDeps, id: string, request: string) {
@@ -305,11 +287,11 @@ export async function decideIdea(db: Db, id: string, status: "approved" | "rejec
   });
 }
 
-async function saveFirstVersion(db: Db, ideaId: string, content: ScenarioContent) {
+async function saveFirstVersion(db: Db, ideaId: string, content: ScenarioContent, channels: ChannelPick[] | null) {
   await db.transaction(async (tx) => {
     const created = await tx
       .insert(scenarios)
-      .values({ ideaId, currentVersion: 1 })
+      .values({ ideaId, currentVersion: 1, channels })
       .onConflictDoNothing()
       .returning({ ideaId: scenarios.ideaId });
     if (created.length > 0) {
@@ -330,32 +312,29 @@ export async function writeScenario({ db, writer }: StudioDeps, ideaId: string) 
   let own = await getScenario(db, ideaId);
   const siblingScenario = sibling && (await getScenario(db, sibling.id));
   if (!own) {
-    const language = idea.language as Language;
-    const context = await writingContext(db, language);
-    let content: ScenarioContent;
-    let verdict: Verdict | null = null;
+    const context = await writingContext(db, idea.language as Language);
     if (siblingScenario) {
-      content = await writer.adaptScenario(context, { scenario: siblingScenario.current.content });
+      const content = await writer.adaptScenario(context, { scenario: siblingScenario.current.content });
+      await saveFirstVersion(db, ideaId, content, siblingScenario.channels);
     } else {
-      const brief = { idea: ideaText(idea), sources: idea.sources.map(({ title, url }) => ({ title, url })) };
-      const { managerEnabled } = await getTeamSettings(db);
-      ({ draft: content, verdict } = await managerCheck(db, {
-        enabled: managerEnabled,
-        agent: "storyteller",
-        language,
-        draft: await writer.writeScenario(context, brief),
-        review: (scenario) => writer.reviewScenario(context, { ...brief, scenario }),
-        rewrite: (feedback) => writer.writeScenario(context, { ...brief, feedback }),
-      }));
+      // You review the scenario yourself, so it goes straight to you. The channel advice comes in the same request.
+      const { channels, ...content } = await writer.writeScenario(context, {
+        idea: ideaText(idea),
+        sources: idea.sources.map(({ title, url }) => ({ title, url })),
+      });
+      await saveFirstVersion(db, ideaId, pickScenario(content), cleanChannelPicks(channels));
     }
-    await saveFirstVersion(db, ideaId, content);
-    await saveVerdict(db, { agent: "storyteller", task: "scenario", language, subject: ideaId, version: 1 }, verdict);
     own = await getScenario(db, ideaId);
   }
   if (sibling && !siblingScenario && own) {
     const context = await writingContext(db, sibling.language as Language);
-    await saveFirstVersion(db, sibling.id, await writer.adaptScenario(context, { scenario: own.current.content }));
+    await saveFirstVersion(db, sibling.id, await writer.adaptScenario(context, { scenario: own.current.content }), own.channels);
   }
+}
+
+/** Only the scenario's own fields are saved as its content. */
+function pickScenario({ title, hook, mainPoints, angle, example, callToAction }: ScenarioContent): ScenarioContent {
+  return { title, hook, mainPoints, angle, example, callToAction };
 }
 
 export async function getScenario(db: Db, ideaId: string) {

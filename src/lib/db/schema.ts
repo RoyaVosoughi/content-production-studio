@@ -1,4 +1,6 @@
 import { bigint, boolean, integer, jsonb, pgTable, primaryKey, real, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
+import type { AnimationScene } from "../video/animation";
+import type { PostImage } from "../post-image";
 
 export const brandKits = pgTable("brand_kits", {
   language: text("language").primaryKey(),
@@ -9,8 +11,28 @@ export const brandKits = pgTable("brand_kits", {
   avoid: text("avoid").notNull(),
   samples: text("samples").notNull(),
   searchTopics: jsonb("search_topics").$type<string[]>().notNull(),
+  /** Sites, domains and RSS feeds the Idea Scout reads, one per line as you typed them. */
+  sources: jsonb("sources").$type<string[]>().notNull().default([]),
   isDraft: boolean("is_draft").notNull().default(true),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/** Where one idea search looked, so you can see it under the results. */
+export type ScoutLook = {
+  onlyMine: boolean;
+  queries: string[];
+  domains: string[];
+  feeds: { url: string; items: number; error?: string }[];
+  links: string[];
+  results: number;
+};
+
+export const scoutRuns = pgTable("scout_runs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  language: text("language").notNull(),
+  looked: jsonb("looked").$type<ScoutLook>().notNull(),
+  ideas: integer("ideas").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
 export type IdeaSource = { url: string; title: string; publishedDate: string | null };
@@ -38,7 +60,12 @@ export const scenarios = pgTable("scenarios", {
     .references(() => ideas.id, { onDelete: "cascade" }),
   currentVersion: integer("current_version").notNull(),
   approvedVersion: integer("approved_version"),
+  /** The scenario writer's advice on which channels fit this idea, with a brief for each. Null for older scenarios. */
+  channels: jsonb("channels").$type<ChannelPick[]>(),
 });
+
+/** How well one channel fits an idea, 1 to 5, the angle to take there, and a short brief for its writer. */
+export type ChannelPick = { platform: string; score: number; recommended: boolean; angle: string; brief: string };
 
 export type ScenarioContent = {
   title: string;
@@ -112,6 +139,8 @@ export type PieceContent = {
   slides?: Slide[];
   /** A photo uploaded for the Instagram cover, by its file name in the media folder. */
   photo?: string;
+  /** LinkedIn and website only: the brand image that goes out with the post. */
+  image?: PostImage;
   /** Video only: the script and shot list to film from. */
   script?: ScriptPart[];
   /** Video only: the id of the uploaded clip. */
@@ -156,6 +185,40 @@ export const videoRenders = pgTable("video_renders", {
   progress: real("progress"),
   error: text("error"),
   duration: real("duration"),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/**
+ * An explainer animation made from a script, outside any idea: scenes in the brand's style, timed by
+ * reading speed or by a narration you upload, which Whisper reads so the scenes follow your voice.
+ */
+export const animations = pgTable("animations", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  language: text("language").notNull(),
+  platform: text("platform").notNull(),
+  title: text("title").notNull(),
+  script: text("script").notNull(),
+  scenes: jsonb("scenes").$type<AnimationScene[]>().notNull(),
+  captions: boolean("captions").notNull().default(true),
+  /** planning while the video editor plans the scenes in the background; failed when it couldn't. */
+  planStatus: text("plan_status").$type<"planning" | "failed">(),
+  planError: text("plan_error"),
+  /** The narration's file name in the narration folder, while there is one. */
+  narration: text("narration"),
+  narrationName: text("narration_name"),
+  narrationStatus: text("narration_status").$type<"processing" | "ready" | "failed">(),
+  narrationStage: text("narration_stage"),
+  narrationProgress: real("narration_progress"),
+  narrationError: text("narration_error"),
+  narrationDuration: real("narration_duration"),
+  words: jsonb("words").$type<Word[]>(),
+  /** The fingerprint of the last video started, and how making it went. */
+  renderKey: text("render_key"),
+  renderStatus: text("render_status").$type<"working" | "ready" | "failed">(),
+  renderProgress: real("render_progress"),
+  renderError: text("render_error"),
+  duration: real("duration"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -320,13 +383,36 @@ export const agentInstructions = pgTable("agent_instructions", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+/** An agent's Skill as you edited it. No row means the agent works from its default Skill file. */
+export const agentSkills = pgTable("agent_skills", {
+  agent: text("agent").primaryKey(),
+  text: text("text").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const teamSettings = pgTable("team_settings", {
   id: integer("id").primaryKey(),
   managerEnabled: boolean("manager_enabled").notNull().default(true),
   lastLearnedAt: timestamp("last_learned_at", { withTimezone: true }),
   lastLearnError: text("last_learn_error"),
   lastLearnSummary: jsonb("last_learn_summary").$type<{ en: string; fa: string }>(),
+  /** Your weekly posting pattern for the calendar. Null until you change the default. */
+  weekPlan: jsonb("week_plan").$type<WeekPlan>(),
 });
+
+/** Which channels go out on each weekday (0 is Sunday), at what time, and how far apart one idea's posts are. */
+export type WeekPlan = { days: string[][]; time: string; gapDays: number };
+
+/** AI requests sent per model per day, for the usage counter. The day follows Google's quota day (Pacific time). */
+export const aiUsage = pgTable(
+  "ai_usage",
+  {
+    day: text("day").notNull(),
+    model: text("model").notNull(),
+    requests: integer("requests").notNull().default(0),
+  },
+  (table) => [primaryKey({ columns: [table.day, table.model] })],
+);
 
 /** The one person the studio works for. See lib/profile.ts. */
 export const profiles = pgTable("profile", {
@@ -356,6 +442,14 @@ CREATE TABLE IF NOT EXISTS brand_kits (
   is_draft boolean NOT NULL DEFAULT true,
   updated_at timestamptz NOT NULL DEFAULT now()
 );
+ALTER TABLE brand_kits ADD COLUMN IF NOT EXISTS sources jsonb NOT NULL DEFAULT '[]'::jsonb;
+CREATE TABLE IF NOT EXISTS scout_runs (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  language text NOT NULL,
+  looked jsonb NOT NULL,
+  ideas integer NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
 CREATE TABLE IF NOT EXISTS ideas (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   language text NOT NULL,
@@ -376,6 +470,7 @@ CREATE TABLE IF NOT EXISTS scenarios (
   current_version integer NOT NULL,
   approved_version integer
 );
+ALTER TABLE scenarios ADD COLUMN IF NOT EXISTS channels jsonb;
 CREATE TABLE IF NOT EXISTS scenario_versions (
   idea_id uuid NOT NULL REFERENCES ideas(id) ON DELETE CASCADE,
   version integer NOT NULL,
@@ -384,6 +479,32 @@ CREATE TABLE IF NOT EXISTS scenario_versions (
   created_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (idea_id, version)
 );
+CREATE TABLE IF NOT EXISTS animations (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  language text NOT NULL,
+  platform text NOT NULL,
+  title text NOT NULL,
+  script text NOT NULL,
+  scenes jsonb NOT NULL,
+  captions boolean NOT NULL DEFAULT true,
+  narration text,
+  narration_name text,
+  narration_status text,
+  narration_stage text,
+  narration_progress real,
+  narration_error text,
+  narration_duration real,
+  words jsonb,
+  render_key text,
+  render_status text,
+  render_progress real,
+  render_error text,
+  duration real,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+ALTER TABLE animations ADD COLUMN IF NOT EXISTS plan_status text;
+ALTER TABLE animations ADD COLUMN IF NOT EXISTS plan_error text;
 CREATE TABLE IF NOT EXISTS pieces (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   idea_id uuid NOT NULL REFERENCES ideas(id) ON DELETE CASCADE,
@@ -511,12 +632,24 @@ ALTER TABLE agent_instructions ADD COLUMN IF NOT EXISTS by_language jsonb NOT NU
 UPDATE agent_instructions
   SET by_language = jsonb_strip_nulls(jsonb_build_object('en', NULLIF(en, ''), 'fa', NULLIF(fa, ''))), en = '', fa = ''
   WHERE en <> '' OR fa <> '';
+CREATE TABLE IF NOT EXISTS agent_skills (
+  agent text PRIMARY KEY,
+  text text NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
 CREATE TABLE IF NOT EXISTS team_settings (
   id integer PRIMARY KEY,
   manager_enabled boolean NOT NULL DEFAULT true,
   last_learned_at timestamptz,
   last_learn_error text,
   last_learn_summary jsonb
+);
+ALTER TABLE team_settings ADD COLUMN IF NOT EXISTS week_plan jsonb;
+CREATE TABLE IF NOT EXISTS ai_usage (
+  day text NOT NULL,
+  model text NOT NULL,
+  requests integer NOT NULL DEFAULT 0,
+  PRIMARY KEY (day, model)
 );
 CREATE TABLE IF NOT EXISTS profile (
   id integer PRIMARY KEY,

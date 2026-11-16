@@ -105,6 +105,12 @@ create table blog_posts (
 );
 ```
 
+**Article images.** When an article has a brand image, the webhook receives it as `image`: `{ url, alt, width, height, content_type, data_base64 }` (`url` is set only when Supabase is also set up). With Supabase, the image goes to the public `studio-media` storage folder and its address is saved in the `cover_image` column, or the one named in `WEBSITE_SUPABASE_IMAGE_COLUMN`. Add the column once:
+
+```sql
+alter table blog_posts add column cover_image text;
+```
+
 In both cases, the article's address comes from your website and the "Where an article lives" pattern on the Setup page, for example `/{lang}/blog/{slug}`.
 
 ## The AI team
@@ -119,7 +125,7 @@ Each member has one job and its own lessons (see the **Team** page): Idea Scout,
 
 ## Your data
 
-Everything stays in `.data/` on your computer: the database, your clips, finished videos and the speech model. The AI provider sees only the text it is asked to write or check. Slide images go to your Supabase storage only when you post to Instagram.
+Everything stays in `.data/` on your computer: the database, your clips, finished videos and the speech model. The AI provider sees only the text it is asked to write or check. Slide images and article images go to your Supabase storage only when you post them.
 
 To use a hosted Postgres instead of the local database, set `DATABASE_URL`. In production (`npm run build && npm start`), `DATABASE_URL` is required.
 

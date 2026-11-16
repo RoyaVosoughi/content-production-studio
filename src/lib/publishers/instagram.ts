@@ -28,6 +28,7 @@ async function graph<T>(method: "GET" | "POST", path: string, params: Record<str
 }
 
 function rejectionFor(error: GraphError["error"]): string {
+  if (error?.code === 10 && /insight/i.test(error.message ?? "")) return "The Instagram token doesn't allow reading numbers. It needs the instagram_business_manage_insights permission.";
   if (error?.code === 190) return "Instagram rejected the access token. It may have expired. Create a new one and put it in INSTAGRAM_ACCESS_TOKEN.";
   if (error?.code === 10 || error?.code === 200) return "The Instagram token doesn't allow posting. It needs the instagram_business_content_publish permission.";
   if (error?.code === 4 || error?.code === 9) return "Instagram's posting limit was reached. Try again later.";
@@ -92,6 +93,42 @@ export const instagramPublisher: Publisher = {
     return { externalId: id, url };
   },
 };
+
+/** What Instagram reports for one post, in the studio's own metric names. */
+export type InstagramNumbers = { views: number; likes?: number; comments?: number; shares?: number; saves?: number; follows?: number };
+
+const INSIGHT_NAMES: Record<string, keyof InstagramNumbers> = {
+  views: "views",
+  likes: "likes",
+  comments: "comments",
+  shares: "shares",
+  saved: "saves",
+  follows: "follows",
+};
+
+type Insights = { data?: { name: string; values?: { value?: number }[]; total_value?: { value?: number } }[] };
+
+/**
+ * Reads a live post's numbers. Instagram doesn't report every number for every kind of post, so when
+ * the full list is refused, the common ones are asked for alone.
+ */
+export async function fetchInstagramNumbers(mediaId: string): Promise<InstagramNumbers> {
+  let reply: Insights;
+  try {
+    reply = await graph<Insights>("GET", `/${encodeURIComponent(mediaId)}/insights`, { metric: "views,likes,comments,shares,saved,follows" });
+  } catch (error) {
+    if (error instanceof PublishRejected && /token|permission/i.test(error.message)) throw error;
+    reply = await graph<Insights>("GET", `/${encodeURIComponent(mediaId)}/insights`, { metric: "views,likes,comments,shares,saved" });
+  }
+  const numbers: Partial<InstagramNumbers> = {};
+  for (const item of reply.data ?? []) {
+    const key = INSIGHT_NAMES[item.name];
+    const value = item.total_value?.value ?? item.values?.[0]?.value;
+    if (key && typeof value === "number" && Number.isFinite(value) && value >= 0) numbers[key] = Math.round(value);
+  }
+  if (numbers.views === undefined) throw new Error("Instagram gave no view count for this post.");
+  return numbers as InstagramNumbers;
+}
 
 export async function checkInstagram(): Promise<{ username: string | null; problem: string | null }> {
   try {

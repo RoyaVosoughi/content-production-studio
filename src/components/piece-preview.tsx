@@ -3,6 +3,7 @@ import { textDirection, type Language } from "@/lib/language";
 import type { Platform } from "@/lib/platforms";
 import { SLIDE_SIZE, slideHtml, type SlideBrand } from "@/lib/slides";
 import { Markdown } from "./markdown";
+import { ImageFrame } from "./post-image-editor";
 
 /** Who the post is from, as each preview shows it. Comes from Setup. */
 export type PreviewBrand = {
@@ -106,6 +107,11 @@ export function PiecePreview({
           </div>
         </div>
         <p className="mt-3 whitespace-pre-wrap break-words text-sm leading-relaxed">{content.body}</p>
+        {content.image && (
+          <div className="-mx-4 mt-3">
+            <ImageFrame image={content.image} language={language} brand={brand.slides} title={content.image.heading} />
+          </div>
+        )}
       </div>
     );
   }
@@ -114,6 +120,11 @@ export function PiecePreview({
   }
   return (
     <div className="rounded-lg bg-canvas p-4" lang={language} dir={dir}>
+      {content.image && (
+        <div className="mb-3">
+          <ImageFrame image={content.image} language={language} brand={brand.slides} title={content.image.heading} />
+        </div>
+      )}
       {brand.articleUrl && (
         <p className="label break-all" dir="ltr">
           {brand.articleUrl.replace(/^https?:\/\//, "")}
