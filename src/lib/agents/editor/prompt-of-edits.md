@@ -94,9 +94,9 @@ Start a chapter wherever a new point begins, the first one at the first kept phr
 
 ## animated-explainer-reel · Animated explainer Reel (picture-in-picture + full-screen animation)
 - Use when: animation, explainer, picture in picture
-- Studio: partly. "Animate a script" on the Video studio page makes the full-screen explainer scenes; picture-in-picture over your clip still needs another tool
-- Keywords: animation, animated, explainer, picture in picture, pop-up, split screen, full screen, motion graphics, glass, grid, انیمیشن, متحرک, توضیحی, تصویر در تصویر, تمام صفحه, موشن گرافیک
-- Source: Reels editor prompt
+- Studio: yes. The editor adds explainers over your clip, synced to the phrases you say them in: your clip in a picture-in-picture card while the animation fills the main area, or the animation full screen with your voice. They fade in and out, stay inside the safe zones and use the light tech look unless you ask for the editorial collage. The storyboard is the plan step: check each explainer there before you make the video
+- Keywords: animation, animated, animate, explainer, picture in picture, pip, pop-up, split screen, full screen, motion graphics, glass, grid, انیمیشن, متحرک, توضیحی, تصویر در تصویر, تمام صفحه, موشن گرافیک
+- Source: Reels editor prompt (skill/reels editor.md)
 
 I've attached two videos:
 MAIN VIDEO: my raw talking-head recording that needs to be edited.
@@ -132,6 +132,14 @@ Do not change my voice, audio, lighting or colors. Keep the original audio as is
 Before the full render, render still frames at key moments, review them yourself, and fix overlaps, clipped text or timing issues.
 Show me a storyboard (scene list with timestamps and split/full-screen choice) before building, so I can approve it.
 Final output: an MP4 at the format above, saved next to my original video.
+
+## vox-explainer · Vox-style editorial explainer
+- Use when: vox, editorial, collage
+- Studio: yes. Explainers and animations in the editorial look: flat colour fields, paper grain and halftone, torn-paper cutouts and tape, marker circles and underlines that draw themselves, bars that grow, snappy entrances
+- Keywords: vox, editorial, collage, newspaper, paper, documentary, data story, magazine, ووکس, کلاژ, روزنامه, کاغذی, مستند, داده
+- Source: vox-motion-graphics skill (skill/vox-motion-graphics.skill)
+
+Make it read like a motion-designed magazine spread, never a slideshow. Structure the explainers like a Vox piece: a cold open (the most surprising fact or question, stated flat), why it matters, then one piece of evidence per explainer, each anchored to a number, a date or a comparison that is actually said, then the turn ("but here's the thing"), and a kicker that reframes the opening. Put the question on screen early and let the video answer it at the end. Something should always be moving, but only one thing should be loud at a time: circle the one number, underline the one claim. Never invent a number or a quote.
 
 ---
 

@@ -34,7 +34,7 @@ import {
   type Platform,
   type VideoPlatform,
 } from "./platforms";
-import { cleanPlan, defaultFraming, simplePlan } from "./video/edit";
+import { cleanPlan, defaultFraming, explainerStyleFor, simplePlan } from "./video/edit";
 import { isRunning, startProcessing, type Transcriber } from "./video/footage";
 import { brandForVideo, renderedFile, renderKey, renderProblem, startRender, type Clip, type DrawCards } from "./video/render";
 import { PUBLISHERS } from "./publishers";
@@ -730,7 +730,19 @@ export async function planVideoEdit(
       samples: await samplesForEdit(db, piece.platform),
       request: request.trim().slice(0, 2000),
     });
-    plan = { ...base, ...proposal, chapters: piece.platform === "youtube" ? proposal.chapters : [] };
+    const { explainers = [], ...rest } = proposal;
+    plan = {
+      ...base,
+      ...rest,
+      chapters: piece.platform === "youtube" ? proposal.chapters : [],
+      explainers: explainers.map((item) => ({
+        phrase: item.from,
+        until: item.to,
+        mode: item.mode,
+        scene: { kind: item.kind, say: "", heading: item.heading, text: item.text, items: item.items },
+      })),
+      explainerStyle: explainerStyleFor(request, old.content.edit?.explainerStyle),
+    };
   }
   await addVersion(db, pieceId, basedOn, { ...old.content, edit: cleanPlan(plan, clip.phrases.length) }, mode === "ai" ? "ai" : "edit", old.scenarioVersion);
 }

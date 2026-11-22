@@ -10,12 +10,13 @@ import {
   savePieceAction,
   useFootageAction,
 } from "@/app/actions";
-import type { EditPlan, PieceContent, Phrase, ScriptPart } from "@/lib/db/schema";
+import type { EditPlan, Explainer, ExplainerStyle, PieceContent, Phrase, ScriptPart } from "@/lib/db/schema";
 import type { Strings } from "@/lib/i18n";
 import { uiLocale, type UiLanguage as Language } from "@/lib/language";
 import { BODY_LIMITS, contentProblem, MANUAL_POSTING, platformLabel, postedText, VIDEO_FORMATS, VIDEO_TITLE_LIMIT, type VideoPlatform } from "@/lib/platforms";
 import { hasPlaceholder } from "@/lib/scenario";
-import { chapterLines, formatTime, keepRanges, outputDuration } from "@/lib/video/edit";
+import { chapterLines, EXPLAINER_KINDS, EXPLAINER_STYLES, formatTime, keepRanges, outputDuration } from "@/lib/video/edit";
+import { hasItems } from "@/lib/video/animation";
 import { THUMBNAIL_PLATFORMS } from "@/lib/video/overlays";
 import { ActionForm, SubmitButton } from "./action-form";
 import { Notice, PieceTools, PublishStatus, type EditorPiece } from "./piece-editor";
@@ -462,6 +463,10 @@ function PlanSection({
         <span className="text-sm font-medium">{t.planRequest}</span>
         <textarea form={aiFormId} name="request" rows={2} maxLength={2000} placeholder={t.planRequestHint} dir="auto" className="field" />
       </label>
+      <label className="flex items-start gap-2 text-sm">
+        <input form={aiFormId} type="checkbox" name="explainers" defaultChecked={Boolean(plan?.explainers?.length)} className="mt-0.5 size-4 accent-cobalt" />
+        {t.planExplainers}
+      </label>
       <div className="flex flex-wrap items-center gap-2">
         <ActionForm action={planEditAction} id={aiFormId}>
           {hidden}
@@ -556,6 +561,23 @@ function PlanSection({
           dir="auto" className="field"
         />
       </label>
+      {(plan.explainers?.length ?? 0) > 0 && (
+        <label className="block max-w-sm">
+          <span className="label mb-1 block">{t.explainerLook}</span>
+          <select
+            value={plan.explainerStyle ?? "tech"}
+            onChange={(event) => set({ explainerStyle: event.target.value as ExplainerStyle })}
+            dir="auto" className="field !py-1.5 text-sm"
+          >
+            {EXPLAINER_STYLES.map((style) => (
+              <option key={style} value={style}>
+                {t.explainerStyles[style]}
+              </option>
+            ))}
+          </select>
+          <span className="mt-1 block text-xs text-ink-soft">{t.explainersHint}</span>
+        </label>
+      )}
       {THUMBNAIL_PLATFORMS.includes(platform) && (
         <label className="block max-w-56">
           <span className="label mb-1 block">{t.thumbnailAt}</span>
@@ -656,6 +678,16 @@ function PlanSection({
                       )}
                     </div>
                   )}
+                  {kept && (
+                    <ExplainerControls
+                      index={index}
+                      phrases={phrases}
+                      cut={cut}
+                      explainers={plan.explainers ?? []}
+                      onChange={(explainers) => set({ explainers })}
+                      t={t}
+                    />
+                  )}
                 </li>
               );
             })}
@@ -674,6 +706,112 @@ function PlanSection({
         </div>
       )}
     </section>
+  );
+}
+
+/** The explainer starting at this phrase, if any: its mode, how far it runs and what it shows. */
+function ExplainerControls({
+  index,
+  phrases,
+  cut,
+  explainers,
+  onChange,
+  t,
+}: {
+  index: number;
+  phrases: Phrase[];
+  cut: Set<number>;
+  explainers: Explainer[];
+  onChange: (explainers: Explainer[]) => void;
+  t: Strings;
+}) {
+  const v = t.videoStudio;
+  const own = explainers.find((item) => item.phrase === index);
+  const covering = explainers.find((item) => item.phrase < index && item.until >= index);
+  if (covering) {
+    return <p className="text-xs font-semibold text-cobalt">{t.explainerInside.replace("{number}", String(covering.phrase + 1))}</p>;
+  }
+  const replace = (next: Explainer | null) =>
+    onChange([...explainers.filter((item) => item.phrase !== index), ...(next ? [next] : [])].sort((a, b) => a.phrase - b.phrase));
+  if (!own) {
+    // A new explainer can only start where no other one is playing.
+    return (
+      <button
+        type="button"
+        className="text-xs font-semibold text-cobalt underline-offset-2 hover:underline"
+        onClick={() =>
+          replace({
+            phrase: index,
+            until: index,
+            mode: "pip",
+            scene: { kind: "statement", say: "", heading: phrases[index].text.split(/\s+/).slice(0, 8).join(" "), text: "", items: [] },
+          })
+        }
+      >
+        + {t.explainerAdd}
+      </button>
+    );
+  }
+  const scene = own.scene;
+  const setScene = (fields: Partial<Explainer["scene"]>) => replace({ ...own, scene: { ...scene, ...fields } });
+  const next = explainers.find((item) => item.phrase > index)?.phrase ?? phrases.length;
+  const reach = Array.from({ length: next - index }, (_, offset) => index + offset).filter((number) => !cut.has(number) || number === index);
+  const textLabel = (v.textFor as Partial<Record<string, string>>)[scene.kind];
+  const headingLabel = (v.headingFor as Partial<Record<string, string>>)[scene.kind] ?? v.heading;
+  return (
+    <fieldset className="space-y-2 rounded-lg border border-cobalt/40 bg-canvas p-2" data-explainer={index}>
+      <legend className="px-1 text-xs font-semibold text-cobalt">{t.explainerTitle}</legend>
+      <div className="grid gap-2 sm:grid-cols-3">
+        <select
+          aria-label={t.explainerMode}
+          value={own.mode}
+          onChange={(event) => replace({ ...own, mode: event.target.value === "full" ? "full" : "pip" })}
+          dir="auto" className="field !py-1.5 text-sm"
+        >
+          <option value="pip">{t.explainerModes.pip}</option>
+          <option value="full">{t.explainerModes.full}</option>
+        </select>
+        <label className="flex items-center gap-1 text-xs">
+          <span className="shrink-0">{t.explainerUntil}</span>
+          <select value={own.until} onChange={(event) => replace({ ...own, until: Number(event.target.value) })} dir="ltr" className="field !py-1.5 text-sm">
+            {reach.map((number) => (
+              <option key={number} value={number}>
+                {number + 1} · {formatTime(phrases[number].end)}
+              </option>
+            ))}
+          </select>
+        </label>
+        <select
+          aria-label={v.kind}
+          value={scene.kind}
+          onChange={(event) => setScene({ kind: event.target.value as Explainer["scene"]["kind"] })}
+          dir="auto" className="field !py-1.5 text-sm"
+        >
+          {EXPLAINER_KINDS.map((kind) => (
+            <option key={kind} value={kind}>
+              {v.kinds[kind]}
+            </option>
+          ))}
+        </select>
+      </div>
+      <input aria-label={headingLabel} placeholder={headingLabel} value={scene.heading} maxLength={120} onChange={(event) => setScene({ heading: event.target.value })} dir="auto" className="field !py-1.5 text-sm" />
+      {textLabel && (
+        <input aria-label={textLabel} placeholder={textLabel} value={scene.text} maxLength={200} onChange={(event) => setScene({ text: event.target.value })} dir="auto" className="field !py-1.5 text-sm" />
+      )}
+      {hasItems(scene.kind) && (
+        <textarea
+          aria-label={scene.kind === "compare" ? v.itemsCompare : v.items}
+          placeholder={scene.kind === "compare" ? v.itemsCompare : v.items}
+          rows={3}
+          value={scene.items.join("\n")}
+          onChange={(event) => setScene({ items: event.target.value.split("\n").slice(0, own.mode === "pip" ? 3 : 5) })}
+          dir="auto" className="field !py-1.5 text-sm"
+        />
+      )}
+      <button type="button" className="text-xs text-danger underline-offset-2 hover:underline" onClick={() => replace(null)}>
+        {t.explainerRemove}
+      </button>
+    </fieldset>
   );
 }
 

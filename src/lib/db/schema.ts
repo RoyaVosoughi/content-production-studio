@@ -1,5 +1,5 @@
 import { bigint, boolean, integer, jsonb, pgTable, primaryKey, real, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
-import type { AnimationScene } from "../video/animation";
+import type { AnimationScene, AnimationStyle } from "../video/animation";
 import type { PostImage } from "../post-image";
 
 export const brandKits = pgTable("brand_kits", {
@@ -127,7 +127,19 @@ export type EditPlan = {
   endCard: boolean;
   /** fill crops to the frame; fit shows the whole picture over a blurred copy of itself. */
   framing: "fill" | "fit";
+  /**
+   * Explainer animations over parts of the clip, each from one phrase to another. In pip mode your
+   * clip plays in a card while the animation fills the main area; in full mode only the animation
+   * shows, with your voice. Missing on plans made before explainers existed.
+   */
+  explainers?: Explainer[];
+  /** The look of the explainers: tech (light, glass, the default), editorial (Vox-style collage) or text (the brand's colours). */
+  explainerStyle?: ExplainerStyle;
 };
+
+export type ExplainerStyle = "tech" | "editorial" | "text";
+
+export type Explainer = { phrase: number; until: number; mode: "pip" | "full"; scene: AnimationScene };
 
 /** body is the post text, or an Instagram caption. The other fields belong to one platform each. */
 export type PieceContent = {
@@ -200,7 +212,7 @@ export const animations = pgTable("animations", {
   script: text("script").notNull(),
   scenes: jsonb("scenes").$type<AnimationScene[]>().notNull(),
   /** cartoon: scenes with characters drawn by the studio. text: animated text cards. */
-  style: text("style").$type<"cartoon" | "text">().notNull().default("text"),
+  style: text("style").$type<AnimationStyle>().notNull().default("text"),
   captions: boolean("captions").notNull().default(true),
   /** planning while the video editor plans the scenes in the background; failed when it couldn't. */
   planStatus: text("plan_status").$type<"planning" | "failed">(),
