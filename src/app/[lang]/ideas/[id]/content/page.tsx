@@ -9,6 +9,7 @@ import { PostTabs, type PostTab } from "@/components/post-tabs";
 import { RemovePiece } from "@/components/remove-piece";
 import { latestVerdicts } from "@/lib/agents/team";
 import { VideoEditor, type EditorVideo } from "@/components/video-editor";
+import { recentPosts } from "@/lib/duplicate";
 import { approvedLanguages, canDeleteLive, getPieces, ideaForContentPage, publishState, videoState } from "@/lib/content";
 import { localize } from "@/lib/i18n";
 import { languageName, textDirection, type Language } from "@/lib/language";
@@ -102,7 +103,9 @@ export default async function ContentPage({ params }: { params: Promise<{ lang: 
             problem: state.problem,
           };
         }
-        return { piece, platform, other, video };
+        // Your latest live posts on this network, so the ready check notices a repeat.
+        const recent = await recentPosts(db, platform, language, idea.id);
+        return { piece, platform, other, video, recent };
       }),
   );
 
@@ -258,7 +261,7 @@ export default async function ContentPage({ params }: { params: Promise<{ lang: 
             ...(canAdd ? [{ key: "add", label: t.addChannels, tone: "add" as const }] : []),
           ]}
           panels={[
-            ...editors.map(({ piece, platform, other, video }) => {
+            ...editors.map(({ piece, platform, other, video, recent }) => {
           const editorPiece = {
             id: piece.id,
             platform,
@@ -286,13 +289,25 @@ export default async function ContentPage({ params }: { params: Promise<{ lang: 
             <div key={`${piece.id}-${piece.currentVersion}`} className="space-y-2">
               {note}
               {video ? (
-                <VideoEditor piece={editorPiece} video={video} language={lang} t={t} />
+                <VideoEditor
+                  piece={editorPiece}
+                  video={video}
+                  sources={idea.sources}
+                  recent={recent}
+                  taken={Object.fromEntries(
+                    editors.filter((other) => isVideoPlatform(other.platform)).map((other) => [other.platform, publishState(other.piece.publication) !== "draft" && publishState(other.piece.publication) !== "failed"]),
+                  )}
+                  language={lang}
+                  contentLanguage={language}
+                  t={t}
+                />
               ) : (
                 <PieceEditor
                   language={lang}
                   contentLanguage={language}
                   brand={brandFor(piece.current.content.slug)}
                   sources={idea.sources}
+                  recent={recent}
                   t={t}
                   piece={editorPiece}
                 />

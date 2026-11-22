@@ -16,7 +16,8 @@ import {
   savePieceAction,
 } from "@/app/actions";
 import type { PublishState } from "@/lib/content";
-import type { PieceContent, Slide } from "@/lib/db/schema";
+import type { IdeaSource, PieceContent, Slide } from "@/lib/db/schema";
+import type { RecentPost } from "@/lib/quality";
 import type { Strings } from "@/lib/i18n";
 import { uiLocale, type Language as ContentLanguage, type UiLanguage as Language } from "@/lib/language";
 import {
@@ -32,6 +33,7 @@ import { hasPlaceholder } from "@/lib/scenario";
 import { ActionForm, SubmitButton } from "./action-form";
 import { PiecePreview, type PreviewBrand } from "./piece-preview";
 import { PostImageEditor } from "./post-image-editor";
+import { ReadyCheckPanel, SourcesBox } from "./ready-check";
 
 export type EditorPiece = {
   id: string;
@@ -58,13 +60,16 @@ export function name(template: string, platform: Platform, language: Language) {
 export function PieceEditor({
   piece,
   sources,
+  recent = [],
   language,
   contentLanguage,
   brand,
   t,
 }: {
   piece: EditorPiece;
-  sources: { url: string }[];
+  sources: IdeaSource[];
+  /** Your latest live posts on this network, for the ready check to notice a repeat. */
+  recent?: RecentPost[];
   /** The interface language. */
   language: Language;
   /** The language the post is written in. */
@@ -151,6 +156,9 @@ export function PieceEditor({
                 {t.saveEdits}
               </SubmitButton>
             </ActionForm>
+            <div className="mt-3">
+              <SourcesBox platform={platform} body={content.body} sources={sources} contentLanguage={contentLanguage} onChange={(body) => update({ body })} t={t} />
+            </div>
             {platform === "instagram" && <CoverPhoto hidden={hidden} photo={content.photo} dirty={dirty} t={t} />}
             {(platform === "linkedin" || platform === "website") && (
               <PostImageEditor
@@ -169,6 +177,7 @@ export function PieceEditor({
 
       {canEdit && (
         <div className="mt-5 space-y-3">
+          <ReadyCheckPanel platform={platform} content={content} sources={sources} recent={recent} ownSite={brand.websiteUrl} language={language} t={t} />
           {overLimit && <Notice>{t.overLimit}</Notice>}
           {placeholder && !dirty && <Notice>{t.placeholderWarning}</Notice>}
           {links.length > 0 && (

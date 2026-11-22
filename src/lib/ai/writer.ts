@@ -12,6 +12,7 @@ import {
   IdeaDraftSchema,
   IdeaTextBatchSchema,
   EditProposalSchema,
+  MomentsSchema,
   AnimationPlanSchema,
   CartoonPlanSchema,
   LessonUpdateSchema,
@@ -445,6 +446,30 @@ ${phrases.map((phrase) => `${phrase.number} [${phrase.start.toFixed(1)}–${phra
       );
     },
 
+    findMoments(context, { title, phrases, duration }) {
+      return run(
+        "editor",
+        context,
+        `{OWNER} filmed a ${Math.max(1, Math.round(duration / 60))}-minute video. Below is its transcript, split into numbered phrases with their start and end in seconds.
+
+Find the 3 to 5 parts that would work as short vertical videos of their own (an Instagram Reel, a YouTube Short or a LinkedIn video), for people who never saw the long one.
+
+Rules:
+- Each part is 20 to 60 seconds long, and never more than 90.
+- It starts on a sentence that hooks a stranger by itself: a surprising claim, a number, a question or a problem. Never start on "so", "and", "as I said" or anything that needs what came before.
+- It ends where the thought ends, ideally on a clear takeaway, not mid-sentence.
+- It makes sense without the rest of the video. Skip introductions, sponsor reads and goodbyes.
+- Parts don't overlap. Put the strongest first, and score honestly: most parts are 5 to 8.
+- Write the title, hook and why in the language of the transcript.
+
+<video_title>${title}</video_title>
+<transcript>
+${phrases.map((phrase) => `${phrase.number} [${phrase.start.toFixed(1)}–${phrase.end.toFixed(1)}] ${phrase.text}`).join("\n")}
+</transcript>`,
+        MomentsSchema,
+      );
+    },
+
     async planAnimation(context, { platform, title, script, style }) {
       const { width, height } = VIDEO_FORMATS[platform];
       if (style === "cartoon") {
@@ -614,6 +639,7 @@ export const studioWriter: WritingModel = {
   revisePiece: (...args) => activeWriter().revisePiece(...args),
   planEdit: (...args) => activeWriter().planEdit(...args),
   planAnimation: (...args) => activeWriter().planAnimation(...args),
+  findMoments: (...args) => activeWriter().findMoments(...args),
   reviewPiece: (...args) => activeWriter().reviewPiece(...args),
   learn: (...args) => activeWriter().learn(...args),
 };

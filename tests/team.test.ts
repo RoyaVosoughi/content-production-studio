@@ -49,6 +49,7 @@ function makeWriter(): { [K in keyof WritingModel]: ReturnType<typeof vi.fn> } {
     revisePiece: vi.fn(),
     planEdit: vi.fn(),
     planAnimation: vi.fn(),
+    findMoments: vi.fn(async () => ({ moments: [] })),
     ...passingTeam(),
   };
 }

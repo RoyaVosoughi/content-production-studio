@@ -1,4 +1,4 @@
-import type { EditPlan, Explainer, ExplainerStyle, Phrase, Word } from "../db/schema";
+import type { EditPlan, Explainer, ExplainerStyle, Moment, Phrase, Word } from "../db/schema";
 import { cleanScenes, type AnimationScene, type SceneKind } from "./animation";
 import { assColor } from "../brand-style";
 import { languageInfo, type Language } from "../language";
@@ -423,4 +423,59 @@ Style: Caption,${font},${size},${WHITE},${WHITE},${INK},&H64000000,0,0,0,0,100,1
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 ${lines.join("\n")}
 `;
+}
+
+// ---- Short videos from a long clip ----
+
+/** Clips at least this long get "Best moments for Shorts". */
+export const MOMENTS_MIN_CLIP = 60;
+const MOMENT_SECONDS = { min: 8, max: 90 };
+const MOMENT_LIMIT = 5;
+/** Where a short video can go: the vertical and 4:5 networks. */
+export const SHORT_PLATFORMS: VideoPlatform[] = ["reel", "short", "linkedin_video"];
+
+/**
+ * The editor's moments, made safe: on real phrases, a usable length, without overlaps, strongest
+ * first. When two overlap, the stronger one stays.
+ */
+export function cleanMoments(moments: Moment[], phrases: Phrase[]): Moment[] {
+  const last = phrases.length - 1;
+  const usable = moments
+    .map((moment) => {
+      const from = Math.round(Math.min(moment.from, moment.to));
+      const to = Math.round(Math.max(moment.from, moment.to));
+      return {
+        from,
+        to,
+        title: String(moment.title ?? "").trim().slice(0, 100),
+        hook: String(moment.hook ?? "").trim().slice(0, 200),
+        why: String(moment.why ?? "").trim().slice(0, 300),
+        score: Math.max(1, Math.min(10, Math.round(Number(moment.score) || 5))),
+      };
+    })
+    .filter((moment) => moment.from >= 0 && moment.to <= last && moment.title)
+    .filter((moment) => {
+      const seconds = phrases[moment.to].end - phrases[moment.from].start;
+      return seconds >= MOMENT_SECONDS.min && seconds <= MOMENT_SECONDS.max;
+    })
+    .sort((a, b) => b.score - a.score || a.from - b.from);
+  const kept: Moment[] = [];
+  for (const moment of usable) {
+    if (kept.length >= MOMENT_LIMIT) break;
+    if (kept.some((other) => moment.from <= other.to && other.from <= moment.to)) continue;
+    kept.push(moment);
+  }
+  return kept;
+}
+
+/** The phrases a short video leaves out: everything before and after its part of the clip. */
+export function outsideWindow(window: { from: number; to: number }, phraseCount: number): number[] {
+  return Array.from({ length: phraseCount }, (_, number) => number).filter((number) => number < window.from || number > window.to);
+}
+
+/** How long a part of the clip is, in seconds. */
+export function windowSeconds(window: { from: number; to: number }, phrases: Phrase[]): number {
+  const first = phrases[window.from];
+  const last = phrases[window.to];
+  return first && last ? Math.max(0, last.end - first.start) : 0;
 }

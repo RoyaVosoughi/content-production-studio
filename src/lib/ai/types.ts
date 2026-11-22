@@ -112,6 +112,22 @@ export const EditProposalSchema = z.object({
 });
 export type EditProposal = z.infer<typeof EditProposalSchema>;
 
+export const MomentsSchema = z.object({
+  moments: z
+    .array(
+      z.object({
+        from: z.number().describe("The phrase number the short video starts at: its first sentence must hook on its own"),
+        to: z.number().describe("The last phrase number it keeps, where the thought ends"),
+        title: z.string().describe("A title of at most 60 characters, in the language of the transcript"),
+        hook: z.string().describe("The caption's first line: at most 120 characters, in the language of the transcript"),
+        why: z.string().describe("One sentence for the author on why this part works alone"),
+        score: z.number().describe("1 to 10: how likely it is to hold a stranger scrolling past"),
+      }),
+    )
+    .describe("3 to 5 moments, strongest first, that don't overlap"),
+});
+export type MomentsProposal = z.infer<typeof MomentsSchema>;
+
 export const AnimationPlanSchema = z.object({
   scenes: z
     .array(
@@ -282,6 +298,11 @@ export interface WritingModel {
       request?: string;
     },
   ): Promise<EditProposal>;
+  /** The video editor finds the parts of a long clip that work as short videos on their own. */
+  findMoments(
+    context: WritingContext,
+    input: { title: string; phrases: { number: number; start: number; end: number; text: string }[]; duration: number },
+  ): Promise<MomentsProposal>;
   /** The video editor turns a script into scenes for an animation: cartoon moments, or animated text cards. */
   planAnimation(
     context: WritingContext,
