@@ -160,7 +160,14 @@ export type PieceContent = {
   edit?: EditPlan;
   /** Video only: the second of the finished video the thumbnail is taken from. */
   thumbnailAt?: number;
+  /** Long clips only: the parts that work as short videos of their own, found by the editor. */
+  moments?: Moment[];
+  /** A short video cut from part of a longer clip: the first and last phrase it keeps. */
+  window?: { from: number; to: number };
 };
+
+/** A part of a clip, from one phrase to another, that stands on its own as a short video. */
+export type Moment = { from: number; to: number; title: string; hook: string; why: string; score: number };
 
 export type Word = { text: string; start: number; end: number };
 /** A stretch of speech between pauses, which is what an edit plan cuts, zooms and captions. */

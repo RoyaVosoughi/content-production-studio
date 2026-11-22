@@ -40,7 +40,7 @@ export type ContentLanguageInfo = {
   /** Decides which bundled typeface draws it on slides and in video captions. */
   script: Script;
   /** The few words the studio itself puts on slides and end cards. */
-  phrases: { swipe: string; follow: string; subscribe: string };
+  phrases: { swipe: string; follow: string; subscribe: string; sources: string };
 };
 
 /**
@@ -49,21 +49,21 @@ export type ContentLanguageInfo = {
  * {name} in a phrase is replaced with the person's name or handle.
  */
 export const CONTENT_LANGUAGES: ContentLanguageInfo[] = [
-  { code: "en", name: "English", faName: "انگلیسی", native: "English", dir: "ltr", locale: "en-US", script: "latin", phrases: { swipe: "Swipe", follow: "Follow {name}", subscribe: "Subscribe for more" } },
-  { code: "fa", name: "Farsi (Persian)", faName: "فارسی", native: "فارسی", dir: "rtl", locale: "fa-IR", script: "arabic", phrases: { swipe: "ورق بزنید", follow: "{name} را دنبال کنید", subscribe: "برای ویدیوهای بیشتر سابسکرایب کنید" } },
-  { code: "ar", name: "Arabic", faName: "عربی", native: "العربية", dir: "rtl", locale: "ar", script: "arabic", phrases: { swipe: "اسحب", follow: "تابع {name}", subscribe: "اشترك للمزيد" } },
-  { code: "es", name: "Spanish", faName: "اسپانیایی", native: "Español", dir: "ltr", locale: "es-ES", script: "latin", phrases: { swipe: "Desliza", follow: "Sigue a {name}", subscribe: "Suscríbete para ver más" } },
-  { code: "fr", name: "French", faName: "فرانسوی", native: "Français", dir: "ltr", locale: "fr-FR", script: "latin", phrases: { swipe: "Faites défiler", follow: "Suivez {name}", subscribe: "Abonnez-vous pour en voir plus" } },
-  { code: "de", name: "German", faName: "آلمانی", native: "Deutsch", dir: "ltr", locale: "de-DE", script: "latin", phrases: { swipe: "Wischen", follow: "Folge {name}", subscribe: "Abonnieren für mehr" } },
-  { code: "it", name: "Italian", faName: "ایتالیایی", native: "Italiano", dir: "ltr", locale: "it-IT", script: "latin", phrases: { swipe: "Scorri", follow: "Segui {name}", subscribe: "Iscriviti per altri video" } },
-  { code: "pt", name: "Portuguese", faName: "پرتغالی", native: "Português", dir: "ltr", locale: "pt-PT", script: "latin", phrases: { swipe: "Deslize", follow: "Siga {name}", subscribe: "Inscreva-se para ver mais" } },
-  { code: "nl", name: "Dutch", faName: "هلندی", native: "Nederlands", dir: "ltr", locale: "nl-NL", script: "latin", phrases: { swipe: "Swipe", follow: "Volg {name}", subscribe: "Abonneer voor meer" } },
-  { code: "sv", name: "Swedish", faName: "سوئدی", native: "Svenska", dir: "ltr", locale: "sv-SE", script: "latin", phrases: { swipe: "Svep", follow: "Följ {name}", subscribe: "Prenumerera för mer" } },
-  { code: "pl", name: "Polish", faName: "لهستانی", native: "Polski", dir: "ltr", locale: "pl-PL", script: "latin", phrases: { swipe: "Przesuń", follow: "Obserwuj {name}", subscribe: "Subskrybuj, aby zobaczyć więcej" } },
-  { code: "tr", name: "Turkish", faName: "ترکی", native: "Türkçe", dir: "ltr", locale: "tr-TR", script: "latin", phrases: { swipe: "Kaydır", follow: "{name} hesabını takip et", subscribe: "Daha fazlası için abone ol" } },
-  { code: "id", name: "Indonesian", faName: "اندونزیایی", native: "Bahasa Indonesia", dir: "ltr", locale: "id-ID", script: "latin", phrases: { swipe: "Geser", follow: "Ikuti {name}", subscribe: "Langganan untuk lebih banyak" } },
-  { code: "ru", name: "Russian", faName: "روسی", native: "Русский", dir: "ltr", locale: "ru-RU", script: "cyrillic", phrases: { swipe: "Листайте", follow: "Подписывайтесь на {name}", subscribe: "Подпишитесь, чтобы не пропустить" } },
-  { code: "uk", name: "Ukrainian", faName: "اوکراینی", native: "Українська", dir: "ltr", locale: "uk-UA", script: "cyrillic", phrases: { swipe: "Гортайте", follow: "Стежте за {name}", subscribe: "Підпишіться, щоб не пропустити" } },
+  { code: "en", name: "English", faName: "انگلیسی", native: "English", dir: "ltr", locale: "en-US", script: "latin", phrases: { swipe: "Swipe", follow: "Follow {name}", subscribe: "Subscribe for more", sources: "Sources" } },
+  { code: "fa", name: "Farsi (Persian)", faName: "فارسی", native: "فارسی", dir: "rtl", locale: "fa-IR", script: "arabic", phrases: { swipe: "ورق بزنید", follow: "{name} را دنبال کنید", subscribe: "برای ویدیوهای بیشتر سابسکرایب کنید", sources: "منابع" } },
+  { code: "ar", name: "Arabic", faName: "عربی", native: "العربية", dir: "rtl", locale: "ar", script: "arabic", phrases: { swipe: "اسحب", follow: "تابع {name}", subscribe: "اشترك للمزيد", sources: "المصادر" } },
+  { code: "es", name: "Spanish", faName: "اسپانیایی", native: "Español", dir: "ltr", locale: "es-ES", script: "latin", phrases: { swipe: "Desliza", follow: "Sigue a {name}", subscribe: "Suscríbete para ver más", sources: "Fuentes" } },
+  { code: "fr", name: "French", faName: "فرانسوی", native: "Français", dir: "ltr", locale: "fr-FR", script: "latin", phrases: { swipe: "Faites défiler", follow: "Suivez {name}", subscribe: "Abonnez-vous pour en voir plus", sources: "Sources" } },
+  { code: "de", name: "German", faName: "آلمانی", native: "Deutsch", dir: "ltr", locale: "de-DE", script: "latin", phrases: { swipe: "Wischen", follow: "Folge {name}", subscribe: "Abonnieren für mehr", sources: "Quellen" } },
+  { code: "it", name: "Italian", faName: "ایتالیایی", native: "Italiano", dir: "ltr", locale: "it-IT", script: "latin", phrases: { swipe: "Scorri", follow: "Segui {name}", subscribe: "Iscriviti per altri video", sources: "Fonti" } },
+  { code: "pt", name: "Portuguese", faName: "پرتغالی", native: "Português", dir: "ltr", locale: "pt-PT", script: "latin", phrases: { swipe: "Deslize", follow: "Siga {name}", subscribe: "Inscreva-se para ver mais", sources: "Fontes" } },
+  { code: "nl", name: "Dutch", faName: "هلندی", native: "Nederlands", dir: "ltr", locale: "nl-NL", script: "latin", phrases: { swipe: "Swipe", follow: "Volg {name}", subscribe: "Abonneer voor meer", sources: "Bronnen" } },
+  { code: "sv", name: "Swedish", faName: "سوئدی", native: "Svenska", dir: "ltr", locale: "sv-SE", script: "latin", phrases: { swipe: "Svep", follow: "Följ {name}", subscribe: "Prenumerera för mer", sources: "Källor" } },
+  { code: "pl", name: "Polish", faName: "لهستانی", native: "Polski", dir: "ltr", locale: "pl-PL", script: "latin", phrases: { swipe: "Przesuń", follow: "Obserwuj {name}", subscribe: "Subskrybuj, aby zobaczyć więcej", sources: "Źródła" } },
+  { code: "tr", name: "Turkish", faName: "ترکی", native: "Türkçe", dir: "ltr", locale: "tr-TR", script: "latin", phrases: { swipe: "Kaydır", follow: "{name} hesabını takip et", subscribe: "Daha fazlası için abone ol", sources: "Kaynaklar" } },
+  { code: "id", name: "Indonesian", faName: "اندونزیایی", native: "Bahasa Indonesia", dir: "ltr", locale: "id-ID", script: "latin", phrases: { swipe: "Geser", follow: "Ikuti {name}", subscribe: "Langganan untuk lebih banyak", sources: "Sumber" } },
+  { code: "ru", name: "Russian", faName: "روسی", native: "Русский", dir: "ltr", locale: "ru-RU", script: "cyrillic", phrases: { swipe: "Листайте", follow: "Подписывайтесь на {name}", subscribe: "Подпишитесь, чтобы не пропустить", sources: "Источники" } },
+  { code: "uk", name: "Ukrainian", faName: "اوکراینی", native: "Українська", dir: "ltr", locale: "uk-UA", script: "cyrillic", phrases: { swipe: "Гортайте", follow: "Стежте за {name}", subscribe: "Підпишіться, щоб не пропустити", sources: "Джерела" } },
 ];
 
 const BY_CODE = new Map(CONTENT_LANGUAGES.map((info) => [info.code, info]));

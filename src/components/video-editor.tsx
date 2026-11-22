@@ -3,6 +3,8 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useId, useRef, useState } from "react";
 import {
+  findMomentsAction,
+  makeShortAction,
   makeVideoAction,
   markPostedByHandAction,
   planEditAction,
@@ -10,16 +12,28 @@ import {
   savePieceAction,
   useFootageAction,
 } from "@/app/actions";
-import type { EditPlan, Explainer, ExplainerStyle, PieceContent, Phrase, ScriptPart } from "@/lib/db/schema";
+import type { EditPlan, Explainer, ExplainerStyle, IdeaSource, Moment, PieceContent, Phrase, ScriptPart } from "@/lib/db/schema";
+import type { RecentPost } from "@/lib/quality";
 import type { Strings } from "@/lib/i18n";
-import { uiLocale, type UiLanguage as Language } from "@/lib/language";
+import { uiLocale, type Language as ContentLanguage, type UiLanguage as Language } from "@/lib/language";
 import { BODY_LIMITS, contentProblem, MANUAL_POSTING, platformLabel, postedText, VIDEO_FORMATS, VIDEO_TITLE_LIMIT, type VideoPlatform } from "@/lib/platforms";
 import { hasPlaceholder } from "@/lib/scenario";
-import { chapterLines, EXPLAINER_KINDS, EXPLAINER_STYLES, formatTime, keepRanges, outputDuration } from "@/lib/video/edit";
+import {
+  chapterLines,
+  EXPLAINER_KINDS,
+  EXPLAINER_STYLES,
+  formatTime,
+  keepRanges,
+  MOMENTS_MIN_CLIP,
+  outputDuration,
+  SHORT_PLATFORMS,
+  windowSeconds,
+} from "@/lib/video/edit";
 import { hasItems } from "@/lib/video/animation";
 import { THUMBNAIL_PLATFORMS } from "@/lib/video/overlays";
 import { ActionForm, SubmitButton } from "./action-form";
 import { Notice, PieceTools, PublishStatus, type EditorPiece } from "./piece-editor";
+import { ReadyCheckPanel, SourcesBox } from "./ready-check";
 
 export type EditorVideo = {
   clip: {
@@ -54,7 +68,26 @@ function useRefreshWhile(busy: boolean) {
 }
 
 /** Remount with key={version} so the fields always match the current version. */
-export function VideoEditor({ piece, video, language, t }: { piece: EditorPiece; video: EditorVideo; language: Language; t: Strings }) {
+export function VideoEditor({
+  piece,
+  video,
+  sources = [],
+  recent = [],
+  taken = {},
+  language,
+  contentLanguage,
+  t,
+}: {
+  piece: EditorPiece;
+  video: EditorVideo;
+  sources?: IdeaSource[];
+  recent?: RecentPost[];
+  /** This idea's videos, by network: true when that one is already posted, so a moment can't replace it. */
+  taken?: Partial<Record<VideoPlatform, boolean>>;
+  language: Language;
+  contentLanguage: ContentLanguage;
+  t: Strings;
+}) {
   const platform = piece.platform as VideoPlatform;
   const formId = useId();
   const [content, setContent] = useState(piece.content);
@@ -170,6 +203,9 @@ export function VideoEditor({ piece, video, language, t }: { piece: EditorPiece;
               </span>
               <textarea form={formId} name="body" rows={hasTitle ? 10 : 7} value={content.body} onChange={(event) => update({ body: event.target.value })} dir="auto" className="field" />
             </label>
+            {sources.length > 0 && (
+              <SourcesBox platform={platform} body={content.body} sources={sources} contentLanguage={contentLanguage} onChange={(body) => update({ body })} t={t} />
+            )}
             {hasTitle ? (
               <label className="block">
                 <span className="label mb-1 block">{t.videoTags}</span>
@@ -192,6 +228,28 @@ export function VideoEditor({ piece, video, language, t }: { piece: EditorPiece;
       {canEdit && (
         <div className="mt-5 space-y-4">
           <ClipSection piece={piece} video={video} dirty={dirty} hidden={hidden} language={language} t={t} />
+
+          {content.window && phrases[content.window.to] && (
+            <p className="rounded-lg border-s-4 border-cobalt bg-canvas p-3 text-sm" data-window>
+              {t.moments.window
+                .replace("{from}", formatTime(phrases[content.window.from].start))
+                .replace("{to}", formatTime(phrases[content.window.to].end))
+                .replace("{duration}", formatTime(windowSeconds(content.window, phrases)))}
+            </p>
+          )}
+
+          {clip?.status === "ready" && (clip.duration ?? 0) >= MOMENTS_MIN_CLIP && !content.window && (
+            <MomentsSection
+              platform={platform}
+              moments={content.moments ?? []}
+              phrases={phrases}
+              taken={taken}
+              dirty={dirty}
+              hidden={hidden}
+              language={language}
+              t={t}
+            />
+          )}
 
           {clip?.status === "ready" && (
             <PlanSection
@@ -228,6 +286,7 @@ export function VideoEditor({ piece, video, language, t }: { piece: EditorPiece;
             )}
           </ActionForm>
 
+          <ReadyCheckPanel platform={platform} content={content} sources={sources} recent={recent} language={language} t={t} />
           {placeholder && !dirty && <Notice>{t.placeholderWarning}</Notice>}
           {problem && <Notice>{problem}</Notice>}
 
@@ -812,6 +871,96 @@ function ExplainerControls({
         {t.explainerRemove}
       </button>
     </fieldset>
+  );
+}
+
+/** The parts of a long clip that work alone, each one click from its own short video. */
+function MomentsSection({
+  platform,
+  moments,
+  phrases,
+  taken,
+  dirty,
+  hidden,
+  language,
+  t,
+}: {
+  platform: VideoPlatform;
+  moments: Moment[];
+  phrases: Phrase[];
+  taken: Partial<Record<VideoPlatform, boolean>>;
+  dirty: boolean;
+  hidden: React.ReactNode;
+  language: Language;
+  t: Strings;
+}) {
+  const m = t.moments;
+  const targets = SHORT_PLATFORMS.filter((target) => target !== platform);
+  return (
+    <section aria-label={m.title} className="space-y-3 rounded-lg border border-mist bg-canvas p-4" data-moments>
+      <div>
+        <h3 className="font-display text-lg font-semibold">{m.title}</h3>
+        <p className="mt-1 text-sm text-ink-soft">{m.hint}</p>
+      </div>
+      {moments.length > 0 && (
+        <ol className="space-y-3">
+          {moments.map((moment, index) => {
+            const start = phrases[moment.from]?.start ?? 0;
+            const end = phrases[moment.to]?.end ?? start;
+            return (
+              <li key={`${moment.from}-${moment.to}`} className="rounded-lg border border-mist p-3" data-moment={index}>
+                <div className="flex flex-wrap items-baseline justify-between gap-2">
+                  <p className="font-semibold" dir="auto">
+                    {moment.title}
+                  </p>
+                  <span className="label" dir="ltr">
+                    {formatTime(start)}–{formatTime(end)} · {formatTime(end - start)}
+                  </span>
+                </div>
+                {moment.hook && (
+                  <p className="mt-1 text-sm" dir="auto">
+                    {moment.hook}
+                  </p>
+                )}
+                <p className="mt-1 text-xs text-ink-soft">
+                  {m.strength.replace("{score}", moment.score.toLocaleString(uiLocale(language)))}
+                  {moment.why && (
+                    <>
+                      {" · "}
+                      <bdi>{moment.why}</bdi>
+                    </>
+                  )}
+                </p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {targets.map((target) => (
+                    <ActionForm key={target} action={makeShortAction}>
+                      {hidden}
+                      <input type="hidden" name="moment" value={index} />
+                      <input type="hidden" name="platform" value={target} />
+                      <input type="hidden" name="ui" value={language} />
+                      <SubmitButton pendingLabel={m.making} className="btn-quiet text-sm" disabled={dirty || taken[target] === true}>
+                        {m.make.replace("{platform}", platformLabel(target, language))}
+                      </SubmitButton>
+                      {taken[target] !== undefined && (
+                        <span className="mt-0.5 block text-xs text-ink-soft">
+                          {taken[target] ? m.posted : m.replaces.replace("{platform}", platformLabel(target, language))}
+                        </span>
+                      )}
+                    </ActionForm>
+                  ))}
+                </div>
+              </li>
+            );
+          })}
+        </ol>
+      )}
+      <ActionForm action={findMomentsAction}>
+        {hidden}
+        <SubmitButton pendingLabel={m.finding} className={moments.length ? "btn-quiet text-sm" : "btn-primary"} disabled={dirty}>
+          {moments.length ? m.again : m.find}
+        </SubmitButton>
+      </ActionForm>
+    </section>
   );
 }
 

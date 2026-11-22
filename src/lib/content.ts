@@ -31,10 +31,20 @@ import {
   postedText,
   slugify,
   uncheckedLinks,
+  VIDEO_TITLE_LIMIT,
   type Platform,
   type VideoPlatform,
 } from "./platforms";
-import { cleanPlan, defaultFraming, explainerStyleFor, simplePlan } from "./video/edit";
+import {
+  cleanMoments,
+  cleanPlan,
+  defaultFraming,
+  explainerStyleFor,
+  MOMENTS_MIN_CLIP,
+  outsideWindow,
+  SHORT_PLATFORMS,
+  simplePlan,
+} from "./video/edit";
 import { isRunning, startProcessing, type Transcriber } from "./video/footage";
 import { brandForVideo, renderedFile, renderKey, renderProblem, startRender, type Clip, type DrawCards } from "./video/render";
 import { PUBLISHERS } from "./publishers";
@@ -688,7 +698,8 @@ export async function useFootage(db: Db, pieceId: string, basedOn: number, foota
     throw new StudioError("That clip isn't one of this idea's clips in this language.");
   }
   const old = await pieceVersion(db, pieceId, basedOn);
-  const { edit: _edit, thumbnailAt: _at, ...rest } = old.content;
+  // A different clip has different phrases, so the moments and the part kept no longer apply either.
+  const { edit: _edit, thumbnailAt: _at, moments: _moments, window: _window, ...rest } = old.content;
   await addVersion(db, pieceId, basedOn, { ...rest, footage: footageId }, "edit", old.scenarioVersion);
 }
 
@@ -718,15 +729,24 @@ export async function planVideoEdit(
   const old = await pieceVersion(db, pieceId, basedOn);
   const clip = old.content.footage ? await readyClip(db, old.content.footage) : null;
   if (!clip) throw new StudioError("Wait until your clip is ready, then plan the edit.");
-  const base: EditPlan = { ...simplePlan(old.content.title ?? ""), framing: defaultFraming(piece.platform, clip.width, clip.height) };
+  // A short video cut from a longer clip keeps only its part: the rest is always cut.
+  const window = old.content.window;
+  const outside = window ? outsideWindow(window, clip.phrases.length) : [];
+  const base: EditPlan = {
+    ...simplePlan(old.content.title ?? ""),
+    framing: defaultFraming(piece.platform, clip.width, clip.height),
+    cut: outside,
+  };
   let plan = base;
   if (mode === "ai") {
     const proposal = await writer.planEdit(await writingContext(db, piece.language), {
       platform: piece.platform,
       title: old.content.title ?? "",
       script: old.content.script ?? [],
-      phrases: clip.phrases.map((phrase, number) => ({ number, start: phrase.start, end: phrase.end, text: phrase.text })),
-      duration: clip.duration,
+      phrases: clip.phrases
+        .map((phrase, number) => ({ number, start: phrase.start, end: phrase.end, text: phrase.text }))
+        .filter((phrase) => !outside.includes(phrase.number)),
+      duration: window ? clip.phrases[window.to].end - clip.phrases[window.from].start : clip.duration,
       samples: await samplesForEdit(db, piece.platform),
       request: request.trim().slice(0, 2000),
     });
@@ -734,6 +754,7 @@ export async function planVideoEdit(
     plan = {
       ...base,
       ...rest,
+      cut: [...new Set([...outside, ...rest.cut])].sort((a, b) => a - b),
       chapters: piece.platform === "youtube" ? proposal.chapters : [],
       explainers: explainers.map((item) => ({
         phrase: item.from,
@@ -745,6 +766,72 @@ export async function planVideoEdit(
     };
   }
   await addVersion(db, pieceId, basedOn, { ...old.content, edit: cleanPlan(plan, clip.phrases.length) }, mode === "ai" ? "ai" : "edit", old.scenarioVersion);
+}
+
+/**
+ * Finds the parts of a long clip that work as short videos of their own, and keeps them on this
+ * version, so they can be made into a Reel, a Short or a LinkedIn video with one click.
+ */
+export async function findClipMoments({ db, writer }: StudioDeps, pieceId: string, basedOn: number) {
+  const piece = await requireVideoPiece(db, pieceId);
+  if (piece.currentVersion !== basedOn) throw new StudioError(STALE_PIECE);
+  const old = await pieceVersion(db, pieceId, basedOn);
+  const clip = old.content.footage ? await readyClip(db, old.content.footage) : null;
+  if (!clip) throw new StudioError("Wait until your clip is ready, then look for its best moments.");
+  if (clip.duration < MOMENTS_MIN_CLIP) throw new StudioError("This clip is already short. Moments are for clips longer than a minute.");
+  const proposal = await writer.findMoments(await writingContext(db, piece.language), {
+    title: old.content.title ?? piece.idea.title,
+    phrases: clip.phrases.map((phrase, number) => ({ number, start: phrase.start, end: phrase.end, text: phrase.text })),
+    duration: clip.duration,
+  });
+  const moments = cleanMoments(proposal.moments, clip.phrases);
+  if (moments.length === 0) throw new StudioError("The editor didn't find a part that works on its own. Try again, or cut one by hand.");
+  await addVersion(db, pieceId, basedOn, { ...old.content, moments }, "ai", old.scenarioVersion);
+}
+
+/**
+ * Makes one moment of a long clip into a short video on another network: the same clip, with
+ * everything outside the moment cut, its title and caption from the moment. When that network
+ * already has a video for this idea, this becomes its new version, so nothing you wrote is lost.
+ */
+export async function makeShortFromMoment(db: Db, pieceId: string, version: number, index: number, target: string) {
+  const source = await requireVideoPiece(db, pieceId);
+  if (source.currentVersion !== version) throw new StudioError(STALE_PIECE);
+  if (!SHORT_PLATFORMS.includes(target as VideoPlatform) || target === source.platform) {
+    throw new StudioError("Choose a Reel, a Short or a LinkedIn video.");
+  }
+  const platform = target as VideoPlatform;
+  const { content, scenarioVersion } = await pieceVersion(db, pieceId, version);
+  const moment = content.moments?.[index];
+  const clip = content.footage ? await readyClip(db, content.footage) : null;
+  if (!moment || !clip || moment.to >= clip.phrases.length) throw new StudioError("That moment is no longer there. Reload and try again.");
+
+  const window = { from: moment.from, to: moment.to };
+  const plan = cleanPlan(
+    { ...simplePlan(moment.title), framing: defaultFraming(platform, clip.width, clip.height), cut: outsideWindow(window, clip.phrases.length) },
+    clip.phrases.length,
+  );
+  const short: PieceContent = {
+    body: moment.hook || moment.title,
+    title: moment.title.slice(0, VIDEO_TITLE_LIMIT),
+    footage: clip.id,
+    window,
+    edit: plan,
+  };
+
+  const [existing] = await db.select().from(pieces).where(and(eq(pieces.ideaId, source.ideaId), eq(pieces.platform, platform)));
+  if (existing) {
+    const current = await pieceVersion(db, existing.id, existing.currentVersion);
+    const { moments: _moments, thumbnailAt: _at, ...kept } = current.content;
+    await addVersion(db, existing.id, existing.currentVersion, { ...kept, ...short }, "edit", current.scenarioVersion);
+    return { ideaId: source.ideaId, pieceId: existing.id, platform };
+  }
+  const made = await db.transaction(async (tx) => {
+    const [piece] = await tx.insert(pieces).values({ ideaId: source.ideaId, platform, currentVersion: 1 }).returning({ id: pieces.id });
+    await tx.insert(pieceVersions).values({ pieceId: piece.id, version: 1, content: short, origin: "edit", scenarioVersion });
+    return piece.id;
+  });
+  return { ideaId: source.ideaId, pieceId: made, platform };
 }
 
 /** Starts making the video for exactly the version on screen. */

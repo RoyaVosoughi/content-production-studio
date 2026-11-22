@@ -466,6 +466,26 @@ Add explainer animations: picture in picture and full screen.`.trim();
   });
 }
 
+/** The parts of a long clip that work as short videos of their own. */
+export async function findMomentsAction(_: ActionState, form: FormData) {
+  return perform(async () => {
+    await content.findClipMoments(await studio.defaultDeps(), text(form, "pieceId"), versionFrom(form));
+  });
+}
+
+/** One moment of a long clip as a Reel, Short or LinkedIn video; opens that video's tab. */
+export async function makeShortAction(_: ActionState, form: FormData) {
+  let to: string | null = null;
+  const state = await perform(async () => {
+    const index = Number(text(form, "moment"));
+    if (!Number.isInteger(index) || index < 0) throw new StudioError("That moment is no longer there. Reload and try again.");
+    const made = await content.makeShortFromMoment(await getDb(), text(form, "pieceId"), versionFrom(form), index, text(form, "platform"));
+    to = `/${uiFrom(form)}/ideas/${made.ideaId}/content#post-${made.platform}`;
+  });
+  if (!state && to) redirect(to);
+  return state;
+}
+
 export async function makeVideoAction(_: ActionState, form: FormData) {
   return perform(async () => {
     await content.makeVideo(await getDb(), text(form, "pieceId"), versionFrom(form));
