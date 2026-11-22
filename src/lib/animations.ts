@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, rename, rm, stat } from "node:fs/promises";
 import path from "node:path";
@@ -18,13 +17,17 @@ import {
   sceneTimeline,
   sentences,
   simpleScenes,
+  themeOf,
   totalDuration,
   type AnimationScene,
   type AnimationStyle,
   type Narration,
 } from "./video/animation";
 import { detectSilences, isRunning, speechWindows, startJob, whisperTranscriber, type Transcriber } from "./video/footage";
+import { chromeFrames, type DrawFrames } from "./video/frames";
 import { brandForVideo } from "./video/render";
+
+export { chromeFrames, type DrawFrames };
 import type { VideoBrand } from "./video/overlays";
 import { DATA_DIR, FFMPEG, FFPROBE, run, VIDEO_DIR } from "./video/tools";
 
@@ -37,7 +40,6 @@ export const SCRIPT_LIMIT = 8000;
 export const MAX_NARRATION_BYTES = 500 * 1024 ** 2;
 export const NARRATION_EXTENSIONS = ["mp3", "m4a", "wav", "aac", "ogg", "oga", "opus", "flac", "webm", "mp4", "mov"];
 const NARRATION_FILE = /^[0-9a-f-]{36}\.(mp3|m4a|wav|aac|ogg|oga|opus|flac|webm|mp4|mov)$/;
-const FPS = 30;
 
 export const NARRATION_DIR = () => path.join(/*turbopackIgnore: true*/ DATA_DIR(), "narration");
 
@@ -267,7 +269,10 @@ export function pageFor(row: Animation, brand: VideoBrand, preview?: { audio: st
   const narration = narrationOf(row);
   const times = sceneTimeline(row.scenes, narration);
   const cues = row.captions ? captionCues(row.scenes, times, narration, row.language) : [];
-  return { html: animationHtml({ scenes: row.scenes, times, cues, platform, language: row.language, brand, preview }), duration: totalDuration(times) };
+  return {
+    html: animationHtml({ scenes: row.scenes, times, cues, platform, language: row.language, brand, preview, theme: themeOf(row.style) }),
+    duration: totalDuration(times),
+  };
 }
 
 /** Everything that changes the finished video, so the same inputs reuse the same file. */
@@ -282,6 +287,8 @@ export function animationKey(row: Animation, brand: VideoBrand): string {
         captions: row.captions,
         narration: narrationOf(row) ? row.narration : null,
         brand,
+        // Only the newer looks are named, so videos made before they existed keep their key.
+        ...(themeOf(row.style) !== "brand" ? { theme: themeOf(row.style) } : {}),
       }),
     )
     .digest("hex")
@@ -300,79 +307,6 @@ export function animationProblem(row: Animation): string | null {
   if (length > max) return `The animation is ${Math.round(length)} seconds long. This network allows up to ${max} seconds, so shorten the script.`;
   return null;
 }
-
-export type DrawFrames = (input: {
-  html: string;
-  width: number;
-  height: number;
-  duration: number;
-  audio: string | null;
-  out: string;
-  onProgress: (progress: number) => void;
-}) => Promise<void>;
-
-/**
- * Chrome shows each moment of the page in turn and takes a picture of it; FFmpeg joins the pictures
- * into a video, with the narration or silence underneath.
- */
-export const chromeFrames: DrawFrames = async ({ html, width, height, duration, audio, out, onProgress }) => {
-  const { chromium } = await import("playwright-core");
-  let browser;
-  try {
-    browser = await chromium.launch(process.env.CHROME_PATH ? { executablePath: process.env.CHROME_PATH } : { channel: "chrome" });
-  } catch {
-    throw new StudioError("The studio needs Google Chrome to draw animations. Install Chrome, or set CHROME_PATH in .env.local.");
-  }
-  const sound = audio ? ["-i", audio] : ["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo"];
-  const ffmpeg = spawn(
-    FFMPEG(),
-    [
-      "-hide_banner", "-nostats", "-y",
-      "-f", "image2pipe", "-framerate", String(FPS), "-c:v", "mjpeg", "-i", "-",
-      ...sound,
-      "-map", "0:v", "-map", "1:a",
-      "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", "-r", String(FPS),
-      "-af", "apad", "-c:a", "aac", "-b:a", "160k", "-ar", "48000",
-      "-t", duration.toFixed(3),
-      "-movflags", "+faststart",
-      out,
-    ],
-    { windowsHide: true },
-  );
-  let log = "";
-  ffmpeg.stderr.on("data", (chunk: Buffer) => {
-    log = (log + chunk.toString()).slice(-3000);
-  });
-  const finished = new Promise<void>((resolve, reject) => {
-    ffmpeg.on("error", (error: NodeJS.ErrnoException) =>
-      reject(error.code === "ENOENT" ? new StudioError("The studio needs FFmpeg to make videos. Install it, then restart the studio.") : error),
-    );
-    ffmpeg.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`ffmpeg exited with ${code}: ${log.trim().split("\n").slice(-5).join("\n")}`))));
-  });
-  // Without this, a failed FFmpeg would make the writes below throw instead of reporting why.
-  ffmpeg.stdin.on("error", () => {});
-  try {
-    const page = await browser.newPage({ viewport: { width, height }, deviceScaleFactor: 1 });
-    await page.setContent(html, { waitUntil: "networkidle", timeout: 60_000 });
-    await page.evaluate(() => document.fonts.ready);
-    const frames = Math.ceil(duration * FPS);
-    for (let frame = 0; frame < frames; frame++) {
-      if (ffmpeg.exitCode !== null) break;
-      await page.evaluate((t) => (window as unknown as { seek: (t: number) => void }).seek(t), frame / FPS);
-      const shot = await page.screenshot({ type: "jpeg", quality: 92 });
-      if (!ffmpeg.stdin.write(shot)) await new Promise((resolve) => ffmpeg.stdin.once("drain", resolve));
-      if (frame % 15 === 0) onProgress(frame / frames);
-    }
-    ffmpeg.stdin.end();
-    await finished;
-  } catch (error) {
-    ffmpeg.kill("SIGKILL");
-    await finished.catch(() => {});
-    throw error;
-  } finally {
-    await browser.close();
-  }
-};
 
 /** Starts making the video for the animation as it is saved now. */
 export async function makeAnimation(db: Db, id: string, draw: DrawFrames = chromeFrames): Promise<string> {

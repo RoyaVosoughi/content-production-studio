@@ -22,6 +22,7 @@ import { tailorSkill } from "@/lib/skill-tailor";
 import { VIEW_COOKIE } from "@/lib/view";
 import { cookies } from "next/headers";
 import { isPlatform } from "@/lib/platforms";
+import { isAnimationStyle, type AnimationStyle } from "@/lib/video/animation";
 import * as results from "@/lib/results";
 import { startScoutJob } from "@/lib/scout-job";
 import * as studio from "@/lib/studio";
@@ -457,7 +458,10 @@ export async function retryFootageAction(_: ActionState, form: FormData) {
 export async function planEditAction(_: ActionState, form: FormData) {
   return perform(async () => {
     const mode = text(form, "mode") === "simple" ? "simple" : "ai";
-    const request = mode === "ai" ? String(form.get("request") ?? "") : "";
+    let request = mode === "ai" ? String(form.get("request") ?? "") : "";
+    // The explainer box asks for the Reels editor prompt by its keywords, so the editor plans explainers.
+    if (mode === "ai" && form.get("explainers") === "on") request = `${request}
+Add explainer animations: picture in picture and full screen.`.trim();
     await content.planVideoEdit(await studio.defaultDeps(), text(form, "pieceId"), versionFrom(form), mode, request);
   });
 }
@@ -498,7 +502,7 @@ export async function createAnimationAction(_: ActionState, form: FormData) {
       title: text(form, "title"),
       script: String(form.get("script") ?? ""),
       mode: text(form, "mode") === "simple" ? "simple" : "ai",
-      style: text(form, "style") === "text" ? "text" : "cartoon",
+      style: isAnimationStyle(text(form, "style")) ? (text(form, "style") as AnimationStyle) : "cartoon",
     });
     to = `/${uiFrom(form)}/video/${id}`;
   });

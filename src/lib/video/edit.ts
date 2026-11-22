@@ -1,4 +1,5 @@
-import type { EditPlan, Phrase, Word } from "../db/schema";
+import type { EditPlan, Explainer, ExplainerStyle, Phrase, Word } from "../db/schema";
+import { cleanScenes, type AnimationScene, type SceneKind } from "./animation";
 import { assColor } from "../brand-style";
 import { languageInfo, type Language } from "../language";
 import { VIDEO_FORMATS, type VideoPlatform } from "../platforms";
@@ -183,6 +184,7 @@ export function cleanPlan(plan: EditPlan, phraseCount: number): EditPlan {
   let cut = unique(plan.cut.filter(valid), (index) => index);
   // Never cut everything: the video would be empty.
   if (cut.length >= phraseCount) cut = [];
+  const explainers = cleanExplainers(Array.isArray(plan.explainers) ? plan.explainers : [], phraseCount, cut);
   return {
     level: plan.level === "full" ? "full" : "light",
     reason: plan.reason.trim().slice(0, 600),
@@ -212,7 +214,76 @@ export function cleanPlan(plan: EditPlan, phraseCount: number): EditPlan {
     ),
     endCard: plan.endCard !== false,
     framing: plan.framing === "fit" ? "fit" : "fill",
+    // Plans without explainers stay exactly as they were, so their finished videos are reused.
+    ...(explainers.length > 0
+      ? { explainers, explainerStyle: isExplainerStyle(plan.explainerStyle) ? plan.explainerStyle : "tech" }
+      : {}),
   };
+}
+
+// ---- Explainers ----
+
+export const EXPLAINER_STYLES: ExplainerStyle[] = ["tech", "editorial", "text"];
+const isExplainerStyle = (value: unknown): value is ExplainerStyle => EXPLAINER_STYLES.includes(value as ExplainerStyle);
+
+/**
+ * The look for explainers: the Vox-style collage when asked for in words, otherwise the look the
+ * edit already had, otherwise the light tech look of the Reels editor prompt.
+ */
+export function explainerStyleFor(request: string, previous?: ExplainerStyle): ExplainerStyle {
+  if (/\b(vox|editorial|collage|newspaper|paper cut)/i.test(request) || /(ووکس|کلاژ|روزنامه|کاغذی)/.test(request)) return "editorial";
+  if (/\b(tech|glass|grid|light background|white background)/i.test(request) || /(تکنولوژی|شیشه|پس‌زمینه سفید|پس زمینه سفید)/.test(request)) return "tech";
+  return previous ?? "tech";
+}
+
+/** Scene kinds an explainer can show over a clip. Cartoons and end cards belong to animations of their own. */
+export const EXPLAINER_KINDS: SceneKind[] = ["title", "statement", "number", "points", "steps", "quote", "compare"];
+export const EXPLAINER_LIMIT = 12;
+/** Beside the picture-in-picture card there is room for three items; full screen fits five. */
+const PIP_ITEMS = 3;
+/** How long the switch between your clip and an explainer takes, each way. */
+export const EXPLAINER_FADE = 0.35;
+const EXPLAINER_MIN = 1.6;
+
+/** Keeps only explainers that start on a kept phrase, in order and without overlaps, with drawable scenes. */
+export function cleanExplainers(explainers: Explainer[], phraseCount: number, cut: number[]): Explainer[] {
+  const valid = (index: unknown): index is number => Number.isInteger(index) && (index as number) >= 0 && (index as number) < phraseCount;
+  const removed = new Set(cut);
+  const kept: Explainer[] = [];
+  const sorted = explainers.filter((item) => item && valid(item.phrase) && !removed.has(item.phrase)).sort((a, b) => a.phrase - b.phrase);
+  for (const item of sorted) {
+    const last = kept[kept.length - 1];
+    if (last && item.phrase <= last.until) continue;
+    const mode = item.mode === "full" ? "full" : "pip";
+    const [scene] = cleanScenes([{ ...item.scene, kind: EXPLAINER_KINDS.includes(item.scene?.kind) ? item.scene.kind : "statement" }]);
+    if (!scene) continue;
+    if (mode === "pip") scene.items = scene.items.slice(0, PIP_ITEMS);
+    kept.push({ phrase: item.phrase, until: valid(item.until) && item.until >= item.phrase ? item.until : item.phrase, mode, scene });
+    if (kept.length >= EXPLAINER_LIMIT) break;
+  }
+  return kept;
+}
+
+export type ExplainerWindow = { start: number; end: number; mode: Explainer["mode"]; scene: AnimationScene };
+
+/** Where each explainer plays in the finished video: from its first phrase to the end of its last kept word. */
+export function explainerWindows(phrases: Phrase[], plan: EditPlan, ranges: Range[], total: number): ExplainerWindow[] {
+  const windows: ExplainerWindow[] = [];
+  let freeFrom = 0;
+  for (const item of plan.explainers ?? []) {
+    const first = phrases[item.phrase];
+    const start = first ? phraseOutputStart(ranges, first) : null;
+    if (start === null || start < freeFrom || start > total - EXPLAINER_MIN) continue;
+    let end: number | null = null;
+    for (let index = Math.max(item.until, item.phrase); index >= item.phrase && end === null; index--) {
+      const words = phrases[index]?.words ?? [];
+      for (let at = words.length - 1; at >= 0 && end === null; at--) end = toOutputTime(ranges, words[at].end);
+    }
+    const until = Math.min(total, Math.max((end ?? start) + 0.3, start + EXPLAINER_MIN));
+    windows.push({ start, end: until, mode: item.mode, scene: item.scene });
+    freeFrom = until + 0.2;
+  }
+  return windows;
 }
 
 // ---- Captions ----

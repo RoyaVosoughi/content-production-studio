@@ -6,9 +6,22 @@ import { and, eq, ne } from "drizzle-orm";
 import type { Db } from "../db/client";
 import { type EditPlan, type PieceContent, type Phrase, videoRenders } from "../db/schema";
 import { StudioError } from "../errors";
-import type { Language } from "../language";
+import { languageInfo, type Language } from "../language";
 import { VIDEO_FORMATS, type VideoPlatform } from "../platforms";
-import { captionChunks, captionFile, formatTime, keepRanges, outputDuration, phraseOutputStart, type Range } from "./edit";
+import { ANIMATION_VERSION, animationHtml, pipBox, themeOf, type PipBox } from "./animation";
+import {
+  captionChunks,
+  captionFile,
+  EXPLAINER_FADE,
+  explainerWindows,
+  formatTime,
+  keepRanges,
+  outputDuration,
+  phraseOutputStart,
+  type ExplainerWindow,
+  type Range,
+} from "./edit";
+import { chromeFrames, type DrawFrames } from "./frames";
 import { footagePath, isRunning, startJob } from "./footage";
 import { DEFAULT_COLORS, getProfile } from "../profile";
 import {
@@ -64,6 +77,8 @@ export function renderKey(
         title: content.title ?? "",
         thumbnailAt: content.thumbnailAt ?? null,
         brand,
+        // Explainers are drawn like animations, so a new animation design makes these videos again.
+        ...(content.edit?.explainers?.length ? { ANIMATION_VERSION } : {}),
       }),
     )
     .digest("hex")
@@ -73,11 +88,13 @@ export function renderKey(
 export const videoFile = (key: string) => path.join(/*turbopackIgnore: true*/ VIDEO_DIR(), `${key}.mp4`);
 export const thumbnailFile = (key: string) => path.join(/*turbopackIgnore: true*/ VIDEO_DIR(), `${key}.jpg`);
 
-/** The motion graphics on the finished video's timeline. */
-export function cardsFor(phrases: Phrase[], plan: EditPlan, ranges: Range[], total: number): Card[] {
+/** The motion graphics on the finished video's timeline. Callouts are left out while an explainer plays. */
+export function cardsFor(phrases: Phrase[], plan: EditPlan, ranges: Range[], total: number, explainers: ExplainerWindow[] = []): Card[] {
   const cards: Card[] = [];
-  if (plan.titleCard.trim() && total > TITLE_AT + 2) {
-    cards.push({ kind: "title", text: plan.titleCard.trim(), start: TITLE_AT, duration: Math.min(TITLE_FOR, total - TITLE_AT - 0.5) });
+  // The title card makes way for an explainer that starts early, and is left out if that leaves too little time to read it.
+  const titleUntil = Math.min(TITLE_AT + TITLE_FOR, total - 0.5, ...explainers.map((window) => window.start));
+  if (plan.titleCard.trim() && total > TITLE_AT + 2 && titleUntil - TITLE_AT >= 1.2) {
+    cards.push({ kind: "title", text: plan.titleCard.trim(), start: TITLE_AT, duration: titleUntil - TITLE_AT });
   }
   let freeFrom = 0;
   for (const callout of [...plan.callouts].sort((a, b) => a.phrase - b.phrase)) {
@@ -86,6 +103,7 @@ export function cardsFor(phrases: Phrase[], plan: EditPlan, ranges: Range[], tot
     // Callouts never overlap each other. They sit above the end card, so they can share the last seconds.
     if (start === null || start < freeFrom || start > total - 1) continue;
     const duration = Math.min(CALLOUT_FOR, total - start - 0.1);
+    if (explainers.some((window) => start < window.end && start + duration > window.start)) continue;
     cards.push({ kind: "callout", text: callout.text, start, duration });
     freeFrom = start + duration + 0.3;
   }
@@ -117,25 +135,80 @@ export function ffmpegArgs(input: {
   cards: (Card & { file: string })[];
   captions: boolean;
   output: string;
+  /** Explainer videos already drawn, each as long as its window, and the card your clip plays in. */
+  explainers?: { file: string; start: number; end: number; mode: ExplainerWindow["mode"] }[];
+  pip?: { box: PipBox; mask: string } | null;
 }): string[] {
   const { width: W, height: H } = VIDEO_FORMATS[input.platform];
   const keep = input.ranges.map((range) => `between(t,${range.start.toFixed(3)},${range.end.toFixed(3)})`).join("+");
   const graph: string[] = [];
+  const explainers = input.explainers ?? [];
+  const pips = input.pip ? explainers.filter((item) => item.mode === "pip") : [];
+  // Inputs: the clip, the cards, the explainers, then for picture-in-picture the card's mask and the clip once more.
+  const explainerInput = 1 + input.cards.length;
+  const maskInput = explainerInput + explainers.length;
+  const pipInput = maskInput + 1;
 
-  graph.push(`[0:v]fps=30,select='${keep}',setpts=N/(30*TB)[cut]`);
-  if (input.plan.framing === "fit") {
-    graph.push(
-      `[cut]split[a][b];[a]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},gblur=sigma=40,eq=brightness=-0.08[bg];` +
-        `[b]scale=${W}:${H}:force_original_aspect_ratio=decrease[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2[framed]`,
-    );
-  } else {
-    graph.push(`[cut]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H}[framed]`);
-  }
+  /** The clip cut and framed to the finished video's size, from one of the clip's inputs. */
+  const framed = (stream: number, name: string) => {
+    graph.push(`[${stream}:v]fps=30,select='${keep}',setpts=N/(30*TB)[${name}c]`);
+    if (input.plan.framing === "fit") {
+      graph.push(
+        `[${name}c]split[${name}a][${name}b];[${name}a]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},gblur=sigma=40,eq=brightness=-0.08[${name}bg];` +
+          `[${name}b]scale=${W}:${H}:force_original_aspect_ratio=decrease[${name}fg];[${name}bg][${name}fg]overlay=(W-w)/2:(H-h)/2[${name}]`,
+      );
+    } else {
+      graph.push(`[${name}c]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H}[${name}]`);
+    }
+  };
+
+  framed(0, "framed");
   let current = "framed";
   if (input.zoom) {
     graph.push(`[framed]scale=w='2*trunc(${W}*(${input.zoom})/2)':h=-2:eval=frame,crop=${W}:${H}[zoomed]`);
     current = "zoomed";
   }
+
+  // The picture-in-picture card is cut from a second reading of the clip, so the main picture never
+  // waits for an explainer that starts later, which would hold its frames in memory until then.
+  if (input.pip && pips.length > 0) {
+    const { box } = input.pip;
+    framed(pipInput, "pipsrc");
+    // Your framing stays as it is: the card shows head and shoulders, cut from the frame, not zoomed in.
+    const ratio = box.w / box.h;
+    const even = (value: number) => 2 * Math.floor(value / 2);
+    const cw = even(Math.min(W, H * ratio));
+    const ch = even(Math.min(H, cw / ratio));
+    const cx = even((W - cw) / 2);
+    const cy = even(W < H ? (H - ch) * 0.3 : (H - ch) / 2);
+    const names = pips.map((_, index) => `pc${index}`);
+    graph.push(`[pipsrc]crop=${cw}:${ch}:${cx}:${cy},scale=${box.w}:${box.h},split=${pips.length}${names.map((name) => `[${name}]`).join("")}`);
+    graph.push(`[${maskInput}:v]format=gray,split=${pips.length}${names.map((_, index) => `[mk${index}]`).join("")}`);
+  }
+
+  explainers.forEach((item, index) => {
+    const start = item.start.toFixed(3);
+    const end = item.end.toFixed(3);
+    const fadeOut = Math.max(item.start, item.end - EXPLAINER_FADE).toFixed(3);
+    let layer = `ex${index}`;
+    graph.push(`[${explainerInput + index}:v]setpts=PTS-STARTPTS+${start}/TB,format=rgba[${layer}]`);
+    const pip = input.pip ? pips.indexOf(item) : -1;
+    if (input.pip && pip >= 0) {
+      const { box } = input.pip;
+      graph.push(
+        `[pc${pip}]trim=start=${start}:end=${end},format=rgba[pv${pip}];[pv${pip}][mk${pip}]alphamerge[pa${pip}];` +
+          `[${layer}][pa${pip}]overlay=${box.x}:${box.y}:eof_action=pass,format=rgba[exc${index}]`,
+      );
+      layer = `exc${index}`;
+    }
+    // The explainer fades in over your clip and back out, so the switch is smooth both ways.
+    graph.push(
+      `[${layer}]fade=in:st=${start}:d=${EXPLAINER_FADE}:alpha=1,fade=out:st=${fadeOut}:d=${EXPLAINER_FADE}:alpha=1[exa${index}]`,
+      `[${current}][exa${index}]overlay=0:0:enable='between(t,${start},${end})':eof_action=pass[exw${index}]`,
+    );
+    current = `exw${index}`;
+  });
+
   input.cards.forEach((card, index) => {
     const stream = index + 1;
     const fadeOut = Math.max(0, card.duration - 0.3).toFixed(2);
@@ -162,6 +235,8 @@ export function ffmpegArgs(input: {
     "-hide_banner", "-nostats", "-y",
     "-i", input.source,
     ...input.cards.flatMap((card) => ["-loop", "1", "-framerate", "30", "-t", card.duration.toFixed(2), "-i", card.file]),
+    ...explainers.flatMap((item) => ["-i", item.file]),
+    ...(input.pip && pips.length > 0 ? ["-loop", "1", "-framerate", "30", "-t", (Math.max(...pips.map((item) => item.end)) + 1).toFixed(2), "-i", input.pip.mask, "-i", input.source] : []),
     "-filter_complex", graph.join(";"),
     "-map", "[vout]", "-map", "[aout]",
     "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-r", "30",
@@ -227,6 +302,7 @@ export async function renderVideo(
   db: Db,
   input: { key: string; pieceId: string; platform: VideoPlatform; language: Language; content: PieceContent; clip: Clip; brand: VideoBrand },
   draw: DrawCards = chromeDraw,
+  frames: DrawFrames = chromeFrames,
 ): Promise<void> {
   const { key, platform, language, content, clip, brand } = input;
   const plan = content.edit!;
@@ -240,7 +316,8 @@ export async function renderVideo(
     const total = outputDuration(ranges);
     const { width, height } = VIDEO_FORMATS[platform];
 
-    const cards = cardsFor(clip.phrases, plan, ranges, total).map((card, index) => ({
+    const windows = explainerWindows(clip.phrases, plan, ranges, total);
+    const cards = cardsFor(clip.phrases, plan, ranges, total, windows).map((card, index) => ({
       ...card,
       file: path.join(/*turbopackIgnore: true*/ work, `card-${index}.png`),
     }));
@@ -254,19 +331,29 @@ export async function renderVideo(
       );
     }
 
+    // Explainers are drawn first, each as a short video, and take the first part of the progress bar.
+    const share = windows.length > 0 ? 0.4 : 0;
+    const explainers = await drawExplainers({ windows, plan, platform, language, brand, work, frames, onProgress: (progress) => void set({ progress: share * progress }) });
+    const box = pipBox(platform, languageInfo(language).dir === "rtl");
+    let pip: { box: PipBox; mask: string } | null = null;
+    if (explainers.some((item) => item.mode === "pip")) {
+      pip = { box, mask: path.join(/*turbopackIgnore: true*/ work, "pip-mask.png") };
+      await draw([{ html: pipMaskHtml(box), file: pip.mask, width, height, element: "#card" }]);
+    }
+
     await mkdir(/*turbopackIgnore: true*/ VIDEO_DIR(), { recursive: true });
     const partial = path.join(/*turbopackIgnore: true*/ VIDEO_DIR(), `${key}.part.mp4`);
     let lastWrite = 0;
     await run(
       FFMPEG(),
-      ffmpegArgs({ source, platform, plan, ranges, zoom: zoomExpression(clip.phrases, plan, ranges), cards, captions: plan.captions, output: partial }),
+      ffmpegArgs({ source, platform, plan, ranges, zoom: zoomExpression(clip.phrases, plan, ranges), cards, captions: plan.captions, output: partial, explainers, pip }),
       {
         cwd: work,
         onLine: (line) => {
           const match = line.match(/^out_time_us=(\d+)/);
           if (!match || Date.now() - lastWrite < 1000) return;
           lastWrite = Date.now();
-          void set({ progress: Math.min(0.99, Number(match[1]) / 1e6 / total) });
+          void set({ progress: Math.min(0.99, share + (1 - share) * (Number(match[1]) / 1e6 / total)) });
         },
       },
     );
@@ -301,6 +388,49 @@ export async function renderVideo(
   }
 }
 
+/** The rounded card your clip plays in, as a white shape on a transparent page; FFmpeg uses it as a mask. */
+export function pipMaskHtml(box: PipBox): string {
+  return `<!doctype html><html><head><style>html,body{margin:0;background:transparent}#card{width:${box.w}px;height:${box.h}px;border-radius:${box.r}px;background:#fff}</style></head><body><div id="card"></div></body></html>`;
+}
+
+/** Draws each explainer as a silent video as long as its window, in the plan's look, over the work folder. */
+export async function drawExplainers(input: {
+  windows: ExplainerWindow[];
+  plan: EditPlan;
+  platform: VideoPlatform;
+  language: Language;
+  brand: VideoBrand;
+  work: string;
+  frames: DrawFrames;
+  onProgress: (progress: number) => void;
+}): Promise<{ file: string; start: number; end: number; mode: ExplainerWindow["mode"] }[]> {
+  const { windows, plan, platform, language, brand, work, frames, onProgress } = input;
+  const { width, height } = VIDEO_FORMATS[platform];
+  const theme = themeOf(plan.explainerStyle ?? "tech");
+  const box = pipBox(platform, languageInfo(language).dir === "rtl");
+  const total = windows.reduce((sum, window) => sum + (window.end - window.start), 0) || 1;
+  const drawn: { file: string; start: number; end: number; mode: ExplainerWindow["mode"] }[] = [];
+  let done = 0;
+  for (const [index, window] of windows.entries()) {
+    const duration = window.end - window.start;
+    const html = animationHtml({
+      scenes: [window.scene],
+      times: [{ start: 0, end: duration }],
+      cues: [],
+      platform,
+      language,
+      brand,
+      theme,
+      insert: { pip: window.mode === "pip" ? box : null },
+    });
+    const file = path.join(/*turbopackIgnore: true*/ work, `explainer-${index}.mp4`);
+    await frames({ html, width, height, duration, audio: null, out: file, onProgress: (progress) => onProgress((done + progress * duration) / total) });
+    done += duration;
+    drawn.push({ file, start: window.start, end: window.end, mode: window.mode });
+  }
+  return drawn;
+}
+
 /** Only the newest video of each post is kept, because videos take a lot of disk space. */
 async function removeOldRenders(db: Db, pieceId: string, keep: string) {
   const old = await db
@@ -327,6 +457,7 @@ export async function startRender(
   db: Db,
   input: { pieceId: string; platform: VideoPlatform; language: Language; content: PieceContent; clip: Clip },
   draw?: DrawCards,
+  frames?: DrawFrames,
 ): Promise<string> {
   const brand = await brandForVideo(db, input.language);
   const key = renderKey(input.platform, input.language, input.clip.id, input.content, brand);
@@ -337,6 +468,6 @@ export async function startRender(
     .insert(videoRenders)
     .values({ key, pieceId: input.pieceId, status: "working", progress: 0 })
     .onConflictDoUpdate({ target: videoRenders.key, set: { status: "working", progress: 0, error: null, updatedAt: new Date() } });
-  startJob(`render:${key}`, () => renderVideo(db, { key, ...input, brand }, draw));
+  startJob(`render:${key}`, () => renderVideo(db, { key, ...input, brand }, draw, frames));
   return key;
 }

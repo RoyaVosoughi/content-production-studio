@@ -263,6 +263,28 @@ ${lines.join("\n")}
 </editing_samples>`;
 }
 
+/** What each look of text animation is, for the planner. */
+const LOOKS = {
+  text: "Each scene is a card of animated text in their brand's colours.",
+  tech: "Each scene is drawn in a light, modern tech look: an off-white page with a faint grid, glass cards, thin glowing lines and blue, violet and cyan accents. It should feel professional and serious, never cartoonish. Steps are drawn extra big.",
+  editorial:
+    "Each scene is drawn as a Vox-style editorial collage: flat colour fields (yellow, paper, navy, coral) that wipe in, paper grain and halftone, headlines on torn paper with tape, marker circles around big numbers, underlines that draw themselves under key claims, bars that grow behind a figure, and snappy entrances.",
+};
+
+/** The story shape of a Vox explainer, for the editorial look. The scenes follow the script; this shapes what goes on screen. */
+const VOX_SHAPE = `
+- Shape the scenes like a Vox explainer, without changing the script: the title scene is the cold open, the most surprising fact or the question the video answers, stated flat. Then why it matters, then one piece of evidence per scene, each anchored to a number, date or comparison from the script (number scenes for figures, compare for contrasts). Mark the turn, the "but here's the thing" moment, with a statement whose label is one or two words such as "But" or "The twist". End on the kicker that reframes the opening, then the end card.
+- Only one loud thing per scene: one number, one claim. Keep the on-screen words few so the marker circle or underline lands on them.`;
+
+/** Prompts in the prompt file that ask for explainer animations over the clip. */
+export const EXPLAINER_PROMPTS = ["animated-explainer-reel", "vox-explainer"];
+
+const EXPLAINER_RULES = `- Explainers: the studio draws an animation over parts of the clip, in sync with the phrases. Add one wherever {OWNER} explains something a viewer understands faster by seeing it: a process (steps), a list (points), a figure (number), a contrast (compare), a key claim (statement) or a quote. Usually 3 to 6 in a one-minute clip, covering about half of it; never over the hook in the first phrase, the call to action, or a phrase you cut.
+- Each explainer runs from one phrase to another (from and to), and the on-screen text must match what is said in those phrases. Never invent a number: number only for a figure {OWNER} says.
+- Mix the two modes. pip keeps {OWNER} visible in a small card while the animation fills the main area; use it for most. full shows only the animation with their voice; use it for one or two big moments, such as the main steps or the key figure.
+- For a step-by-step process, make each step its own short item, big and clear, in the order said. Beside the card (pip) there is room for at most 3 items.
+- Don't add callouts or zooms on phrases an explainer covers.`;
+
 /** The prompts from {OWNER}'s prompt file that fit this edit. */
 function editPromptsBlock(prompts: EditPrompt[]): string {
   if (!prompts.length) return "";
@@ -397,6 +419,7 @@ Adapt the scenario to how people read on this platform. Do not paste its section
       const limit = VIDEO_FORMATS[platform].maxSeconds;
       const asked = [PLATFORM_NAMES[platform], request, context.skills?.editor?.custom ? context.skills.editor.text : "", ...(samples ?? []).map((sample) => sample.note)];
       const prompts = selectEditPrompts(loadEditPrompts(), asked.filter(Boolean).join("\n"));
+      const explaining = prompts.some((prompt) => EXPLAINER_PROMPTS.includes(prompt.id));
       return run(
         "editor",
         context,
@@ -411,6 +434,7 @@ Rules:
 - Use zooms and callouts sparingly, only on the strongest moments, and never on a phrase you cut.
 - The transcription may misspell words. Copy highlights exactly as they appear in the transcript.
 - Write the reason and the title card, callouts and chapters in the language of the transcript.
+${explaining ? EXPLAINER_RULES : "- Leave explainers empty."}
 
 <video_title>${title}</video_title>
 <script>${JSON.stringify(script)}</script>
@@ -462,7 +486,7 @@ ${script}
       return run(
         "editor",
         context,
-        `Turn {OWNER}'s script into an explainer motion-graphics video for ${EDIT_GOALS[platform]}, ${width > height ? "landscape" : "portrait"}. Each scene is a card of animated text in their brand's colours. Choose a kind for every scene:
+        `Turn {OWNER}'s script into an explainer motion-graphics video for ${EDIT_GOALS[platform]}, ${width > height ? "landscape" : "portrait"}. ${LOOKS[style === "tech" || style === "editorial" ? style : "text"]} Choose a kind for every scene:
 - title: the opening hook, as a heading with an optional subtitle.
 - statement: one strong sentence, shown big.
 - number: a striking figure from the script (text is the number, such as 73% or 3x; heading says what it means). Only use numbers that are in the script. Never invent one.
@@ -477,7 +501,7 @@ Rules:
 - One idea per scene, about 8 to 30 words of say each. Usually 5 to 14 scenes. Start with a title scene and finish with an end scene.
 - On-screen text is short and complements what is said: a heading of at most 8 words, items of at most 6. Never paste the whole say on screen.
 - Vary the kinds so the video keeps moving. Use points or steps where the script lists things, number only for real figures, compare for contrasts.
-- Write every on-screen field in the language of the script.
+- Write every on-screen field in the language of the script.${style === "editorial" ? VOX_SHAPE : ""}
 
 <video_title>${title}</video_title>
 <script>

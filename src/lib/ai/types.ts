@@ -4,6 +4,7 @@ import type { BrandKitFields } from "../brand-seed";
 import type { PieceContent, SampleMeasures, ScenarioContent, ScriptPart } from "../db/schema";
 import type { Language } from "../language";
 import { PLATFORMS, type Platform, type VideoPlatform } from "../platforms";
+import type { AnimationStyle } from "../video/animation";
 
 export const IdeaDraftSchema = z.object({
   title: z.string(),
@@ -94,6 +95,20 @@ export const EditProposalSchema = z.object({
   chapters: z
     .array(z.object({ phrase: z.number(), title: z.string() }))
     .describe("YouTube only: where each chapter starts, the first at the first kept phrase. Empty for other networks"),
+  explainers: z
+    .array(
+      z.object({
+        from: z.number().describe("The phrase number where the animation starts"),
+        to: z.number().describe("The phrase number where it ends: the same as from for a single phrase"),
+        mode: z.enum(["pip", "full"]).describe("pip: the clip in a small card, the animation fills the main area. full: only the animation, with the voice"),
+        kind: z.enum(["title", "statement", "number", "points", "steps", "quote", "compare"]),
+        heading: z.string().describe("At most 8 words"),
+        text: z.string().describe("statement: a small label above. number: the big number. quote: the quote. compare: the two column names as 'A | B'. title: a subtitle. Otherwise empty"),
+        items: z.array(z.string()).describe("points and steps: 2 to 5 items of at most 5 words (at most 3 in pip). compare: 2 to 3 rows as 'left | right'. Otherwise empty"),
+      }),
+    )
+    .optional()
+    .describe("Explainer animations over parts of the clip. Only when the edit prompts ask for them; otherwise empty"),
 });
 export type EditProposal = z.infer<typeof EditProposalSchema>;
 
@@ -270,7 +285,7 @@ export interface WritingModel {
   /** The video editor turns a script into scenes for an animation: cartoon moments, or animated text cards. */
   planAnimation(
     context: WritingContext,
-    input: { platform: VideoPlatform; title: string; script: string; style?: "cartoon" | "text" },
+    input: { platform: VideoPlatform; title: string; script: string; style?: AnimationStyle },
   ): Promise<AnimationPlan>;
   /** The manager checks a channel's final draft. Ideas and scenarios are checked by you. */
   reviewPiece(

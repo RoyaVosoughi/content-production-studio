@@ -81,7 +81,7 @@ export default async function VideoStudioPage({ params }: { params: Promise<{ la
             <fieldset>
               <legend className="label mb-2 block">{v.styleLabel}</legend>
               <div className="grid gap-3 sm:grid-cols-2">
-                {(["cartoon", "text"] as const).map((style) => (
+                {(["cartoon", "tech", "editorial", "text"] as const).map((style) => (
                   <label key={style} className="flex cursor-pointer gap-3 rounded-lg border border-mist p-3 has-[:checked]:border-cobalt">
                     <input type="radio" name="style" value={style} defaultChecked={style === "cartoon"} className="mt-1" />
                     <span>

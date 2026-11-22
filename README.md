@@ -10,7 +10,7 @@ Nothing is published without your click, and every approval is tied to the exact
 - **One or two languages.** Write in any one of 15 languages, or a pair. With two, every idea and post is written in the main language first, then adapted into the second, as a native writer would phrase it rather than as a word-for-word translation.
 - **An AI team.** Nine writers, each with one job, plus a manager that checks first drafts and a coach that turns your edits and decisions into lessons. You can give each member its own instructions.
 - **Posting.** Telegram, LinkedIn, Instagram and your website, through their official APIs, or by hand (copy, download, then record that you posted) wherever a connection isn't set up.
-- **Video.** Upload the clip you filmed. The studio transcribes it on your computer with Whisper, proposes an edit (cuts, captions, title card, zooms, chapters), and renders it with FFmpeg in your brand's fonts and colours.
+- **Video.** Upload the clip you filmed. The studio transcribes it on your computer with Whisper, proposes an edit (cuts, captions, title card, zooms, chapters, and explainer animations synced to your words, with your clip in a picture-in-picture card or the animation full screen), and renders it with FFmpeg in your brand's fonts and colours. It can also animate any script as cartoons or motion graphics, in your brand's colours, a light tech look or a Vox-style editorial collage.
 - **Free while you try it.** It uses OpenRouter's free models by default, and Claude when you add an Anthropic key.
 
 > **Security:** there is no login. The studio only listens on `127.0.0.1`, so only your own computer can open it. Anyone who can open it can post as you, so **add authentication before hosting it anywhere else.**
