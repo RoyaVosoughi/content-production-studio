@@ -527,7 +527,11 @@ export async function useWholeClipAction(_: ActionState, form: FormData) {
 
 export async function makeVideoAction(_: ActionState, form: FormData) {
   return perform(async () => {
-    await content.makeVideo(await getDb(), text(form, "pieceId"), versionFrom(form));
+    const deps = await studio.defaultDeps();
+    const pieceId = text(form, "pieceId");
+    // An empty caption or cover text is written from the clip first, so the finished video comes with its words.
+    const version = await content.fillVideoText(deps, pieceId, versionFrom(form));
+    await content.makeVideo(deps.db, pieceId, version);
   });
 }
 

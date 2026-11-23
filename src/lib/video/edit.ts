@@ -47,12 +47,16 @@ export function buildPhrases(words: Word[]): Phrase[] {
 /** A pause the audio really has. */
 export type Silence = { start: number; end: number };
 
+/** Change this when hearing pauses changes, so clips are measured again. */
+export const PAUSES_VERSION = 2;
 /** The audio is measured in steps this long. */
 export const LEVEL_STEP = 0.05;
 /** Quiet this long counts as a pause. */
 const MIN_PAUSE = 0.3;
 /** Where quiet ends and speech starts, from the room's silence up towards the voice. */
 const SPEECH_SHARE = 0.35;
+/** A sound that never gets this far up towards the voice is a breath or a click, not a word. */
+const WORD_SHARE = 0.6;
 /** A clip with less than this between its quiet and its voice is too noisy to tell them apart. */
 const MIN_RANGE_DB = 15;
 
@@ -69,14 +73,29 @@ export function pausesFromLevels(levels: number[]): Silence[] {
   const voice = at(0.95);
   if (voice - quiet < MIN_RANGE_DB) return [];
   const line = quiet + SPEECH_SHARE * (voice - quiet);
+  const loud = quiet + WORD_SHARE * (voice - quiet);
+  // Each step is speech or quiet. A sound between two quiet stretches that never gets near the
+  // voice, such as a breath or a click, is quiet too. A sentence's soft ending is joined to its
+  // words, so it stays speech.
+  const speech = levels.map((level) => level >= line);
+  for (let index = 0; index < levels.length; ) {
+    if (!speech[index]) {
+      index++;
+      continue;
+    }
+    let end = index;
+    while (end < levels.length && speech[end]) end++;
+    if (!levels.slice(index, end).some((level) => level >= loud)) speech.fill(false, index, end);
+    index = end;
+  }
   const pauses: Silence[] = [];
   let from: number | null = null;
   const close = (to: number) => {
     if (from !== null && (to - from) * LEVEL_STEP >= MIN_PAUSE) pauses.push({ start: from * LEVEL_STEP, end: to * LEVEL_STEP });
     from = null;
   };
-  levels.forEach((level, index) => {
-    if (level < line) from ??= index;
+  speech.forEach((isSpeech, index) => {
+    if (!isSpeech) from ??= index;
     else close(index);
   });
   close(levels.length);
@@ -204,11 +223,11 @@ export function keepRanges(
 }
 
 /** Audio pauses at least this long are shortened when tightenPauses is on... */
-const CUT_PAUSE = 0.6;
+const CUT_PAUSE = 0.3;
 /** ...to this much quiet after speech, so a sentence's soft ending is never clipped... */
-const ROOM_AFTER = 0.3;
+const ROOM_AFTER = 0.12;
 /** ...and this much before the next, so the cut sounds like a breath, not a jump. */
-const ROOM_BEFORE = 0.15;
+const ROOM_BEFORE = 0.08;
 /** A sliver left between two cuts is too short to hear as speech. */
 const SLIVER = 0.12;
 

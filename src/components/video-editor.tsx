@@ -428,9 +428,10 @@ export function VideoEditor({
           <input type="hidden" form={formId} name="videoTags" value="" />
         )}
 
-        <ReadyCheckPanel platform={platform} content={content} sources={sources} recent={recent} language={language} t={t} />
+        {content.body.trim() && (
+          <ReadyCheckPanel platform={platform} content={content} sources={sources} recent={recent} language={language} t={t} />
+        )}
         {placeholder && !dirty && <Notice>{t.placeholderWarning}</Notice>}
-        {problem && <Notice>{problem}</Notice>}
 
         <VideoManualPost
           platform={platform}

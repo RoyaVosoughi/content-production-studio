@@ -23,6 +23,7 @@ import { languageName, type Language } from "./language";
 import { requireProfile } from "./profile";
 import { slideBrand, type SlideBrand } from "./slides";
 import {
+  BODY_LIMITS,
   contentProblem,
   isPlatform,
   isVideoPlatform,
@@ -41,7 +42,6 @@ import {
   cleanPlan,
   defaultFraming,
   explainerStyleFor,
-  hasPiledWords,
   HIGHLIGHT_SECONDS,
   keptParts,
   MOMENTS_MIN_CLIP,
@@ -51,7 +51,7 @@ import {
   SHORT_PLATFORMS,
   simplePlan,
 } from "./video/edit";
-import { isRunning, pausesOf, startProcessing, type Transcriber } from "./video/footage";
+import { isRunning, needsPauses, pausesOf, startProcessing, type Transcriber } from "./video/footage";
 import { brandForVideo, renderedFile, renderKey, renderProblem, startRender, type Clip, type DrawCards } from "./video/render";
 import { PUBLISHERS } from "./publishers";
 import { PublishRejected, type Publisher } from "./publishers/types";
@@ -711,7 +711,7 @@ export async function markPostedByHand(db: Db, pieceId: string, version: number,
 async function readyClip(db: Db, id: string): Promise<Clip | null> {
   let [clip] = await db.select().from(footage).where(eq(footage.id, id));
   if (!clip || clip.status !== "ready" || !clip.phrases || !clip.duration || !clip.width || !clip.height) return null;
-  if (!clip.pauses || hasPiledWords(clip.phrases)) {
+  if (needsPauses({ ...clip, phrases: clip.phrases })) {
     // Read before the studio measured its pauses or placed piled words: done once, then read again.
     await pausesOf(db, { ...clip, duration: clip.duration, phrases: clip.phrases });
     [clip] = await db.select().from(footage).where(eq(footage.id, id));
@@ -964,6 +964,47 @@ export async function useWholeClip(db: Db, pieceId: string, basedOn: number) {
   if (!keptParts(old.content)) return;
   const { window: _window, parts: _parts, edit: _edit, thumbnailAt: _at, ...rest } = old.content;
   await addVersion(db, pieceId, basedOn, rest, "edit", old.scenarioVersion);
+}
+
+/**
+ * Before a video is made, writes whatever post text is still empty (the caption, and the cover text or
+ * title) from what is said in the parts the video keeps, as a new version. Text you wrote is never
+ * touched. The cover text goes into the video, so this happens before it is made, not after.
+ * Returns the version to make the video from. If the writer can't help, the video is made anyway.
+ */
+export async function fillVideoText({ db, writer }: StudioDeps, pieceId: string, version: number): Promise<number> {
+  const piece = await requireVideoPiece(db, pieceId);
+  if (piece.currentVersion !== version) throw new StudioError(STALE_PIECE);
+  const old = await pieceVersion(db, pieceId, version);
+  const needsBody = !old.content.body.trim();
+  const needsTitle = !old.content.title?.trim();
+  if (!needsBody && !needsTitle) return version;
+  const clip = old.content.footage ? await readyClip(db, old.content.footage) : null;
+  if (!clip) return version;
+  const cut = new Set(old.content.edit?.cut ?? outsideParts(keptParts(old.content) ?? [], clip.phrases.length));
+  const fixes = new Map((old.content.edit?.fixes ?? []).map((fix) => [fix.phrase, fix.text]));
+  const spoken = clip.phrases
+    .map((phrase, number) => (cut.has(number) ? "" : (fixes.get(number) ?? phrase.text).trim()))
+    .filter(Boolean)
+    .join(" ")
+    .slice(0, 8000);
+  if (!spoken) return version;
+  const missing = [needsTitle && "the title (the cover text)", needsBody && "the body (the caption)"].filter(Boolean).join(" and ");
+  let written: PieceContent;
+  try {
+    written = await writer.revisePiece(await writingContext(db, piece.language), {
+      platform: piece.platform,
+      content: { title: old.content.title ?? "", body: old.content.body, ...(old.content.tags ? { tags: old.content.tags } : {}) },
+      request: `The video is filmed. Write ${missing} from what is said in it, in the language it is spoken in, following this platform's rules. Keep every other field exactly as it is.\n<spoken>${spoken}</spoken>`,
+    });
+  } catch {
+    return version;
+  }
+  const title = needsTitle ? (written.title ?? "").trim().slice(0, VIDEO_TITLE_LIMIT) : old.content.title;
+  const body = needsBody ? (written.body ?? "").trim().slice(0, BODY_LIMITS[piece.platform]) : old.content.body;
+  if (title === old.content.title && body === old.content.body) return version;
+  await addVersion(db, pieceId, version, { ...old.content, title, body }, "ai", old.scenarioVersion);
+  return version + 1;
 }
 
 /** Starts making the video for exactly the version on screen. */

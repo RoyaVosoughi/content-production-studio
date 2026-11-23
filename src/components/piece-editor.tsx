@@ -178,7 +178,9 @@ export function PieceEditor({
 
       {canEdit && (
         <div className="mt-5 space-y-3">
-          <ReadyCheckPanel platform={platform} content={content} sources={sources} recent={recent} ownSite={brand.websiteUrl} language={language} t={t} />
+          {content.body.trim() && (
+            <ReadyCheckPanel platform={platform} content={content} sources={sources} recent={recent} ownSite={brand.websiteUrl} language={language} t={t} />
+          )}
           {overLimit && <Notice>{t.overLimit}</Notice>}
           {placeholder && !dirty && <Notice>{t.placeholderWarning}</Notice>}
           {links.length > 0 && (

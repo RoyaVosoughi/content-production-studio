@@ -201,6 +201,8 @@ export const footage = pgTable("footage", {
   silences: jsonb("silences").$type<{ start: number; end: number }[]>(),
   /** The pauses in the audio, measured against the clip's own loudness. Null until measured. */
   pauses: jsonb("pauses").$type<{ start: number; end: number }[]>(),
+  /** Which way of hearing pauses measured them, so a better way measures them again. */
+  pausesVersion: integer("pauses_version"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
@@ -585,6 +587,7 @@ CREATE TABLE IF NOT EXISTS footage (
 );
 ALTER TABLE footage ADD COLUMN IF NOT EXISTS silences jsonb;
 ALTER TABLE footage ADD COLUMN IF NOT EXISTS pauses jsonb;
+ALTER TABLE footage ADD COLUMN IF NOT EXISTS pauses_version integer;
 CREATE TABLE IF NOT EXISTS publications (
   piece_id uuid PRIMARY KEY REFERENCES pieces(id) ON DELETE CASCADE,
   version integer NOT NULL,

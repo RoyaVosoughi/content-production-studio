@@ -41,7 +41,7 @@ import { FFMPEG, filterPath, FONT_DIR, run, VIDEO_DIR } from "./tools";
 /** Change this when the editing changes, so videos made the old way are made again. */
 export const RENDER_VERSION = 2;
 /** Change this when shortening pauses changes: only videos that shorten them are made again. */
-const PAUSES_VERSION = 2;
+const CUTS_VERSION = 3;
 
 const TITLE_AT = 0.3;
 const TITLE_FOR = 3.2;
@@ -90,7 +90,7 @@ export function renderKey(
         thumbnailAt: content.thumbnailAt ?? null,
         brand,
         // Shortened pauses now follow the audio itself, so videos that shortened them are made again.
-        ...(content.edit?.tightenPauses ? { PAUSES_VERSION } : {}),
+        ...(content.edit?.tightenPauses ? { PAUSES_VERSION: CUTS_VERSION } : {}),
         // Explainers are drawn like animations, so a new animation design makes these videos again.
         ...(content.edit?.explainers?.length ? { ANIMATION_VERSION } : {}),
       }),

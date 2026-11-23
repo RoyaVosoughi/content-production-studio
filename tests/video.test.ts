@@ -10,6 +10,7 @@ import {
   addFootage,
   approveAndPublish,
   createPieces,
+  fillVideoText,
   getPieces,
   makeVideo,
   markPostedByHand,
@@ -105,6 +106,9 @@ describe("editing logic", () => {
     // A quiet room (-85 dB), a voice around -30 dB, and a sentence that fades to -55 dB before stopping.
     const levels = [...Array(20).fill(-30), ...Array(6).fill(-55), ...Array(30).fill(-85), ...Array(20).fill(-30)];
     expect(pausesFromLevels(levels)).toEqual([{ start: 1.3, end: expect.closeTo(2.8, 5) }]);
+    // A breath between two pauses never reaches the voice, so the pause stays one pause.
+    const breath = [...Array(20).fill(-30), ...Array(10).fill(-85), ...Array(4).fill(-60), ...Array(10).fill(-85), ...Array(20).fill(-30)];
+    expect(pausesFromLevels(breath)).toEqual([{ start: 1, end: expect.closeTo(2.2, 5) }]);
     // Too noisy to tell quiet from voice: no pauses at all, rather than cutting speech.
     expect(pausesFromLevels([...Array(20).fill(-30), ...Array(20).fill(-38)])).toEqual([]);
     // Loudness is measured in 50 ms steps.
@@ -145,11 +149,11 @@ describe("editing logic", () => {
     const tight = keepRanges(misplaced, plan({ tightenPauses: true }), 5.3, silences);
     expect(outputDuration(tight)).toBeLessThan(2);
     // Each cut leaves a breath of quiet on both sides.
-    expect(tight[0].end).toBeCloseTo(0.9);
-    expect(tight[1].start).toBeCloseTo(4.45);
+    expect(tight[0].end).toBeCloseTo(0.72);
+    expect(tight[1].start).toBeCloseTo(4.52);
     // Speech Whisper ended too early runs on to the pause that really ends it.
     const early = buildPhrases([word("Say", 0, 0.3), word("it", 0.3, 0.5)]);
-    expect(keepRanges(early, plan({ tightenPauses: true }), 6, [{ start: 1.2, end: 5 }])[0].end).toBeCloseTo(1.5);
+    expect(keepRanges(early, plan({ tightenPauses: true }), 6, [{ start: 1.2, end: 5 }])[0].end).toBeCloseTo(1.32);
     // Only when asked.
     expect(outputDuration(keepRanges(misplaced, plan(), 6, silences))).toBeGreaterThan(5);
   });
@@ -437,6 +441,35 @@ describe("videos Sam films", () => {
     [piece] = await getPieces(db, reel.ideaId);
     expect(piece.publication?.status).toBe("posted");
   }, 120_000);
+
+  it("writes an empty caption and cover text from what is said before making the video, and keeps text Sam wrote", async () => {
+    await upload(db, reel.id, 1);
+    await planVideoEdit(deps, reel.id, 2, "simple");
+    await savePieceEdit(db, reel.id, 3, { body: "", title: "", edit: plan({ cut: [1, 2], titleCard: "" }) });
+    const revisePiece = vi.fn(async () => ({ title: "Five hours back", body: "Agents save you five hours a week #ai" }));
+    const writing = { ...deps, writer: { ...deps.writer, revisePiece } as unknown as StudioDeps["writer"] };
+
+    expect(await fillVideoText(writing, reel.id, 4)).toBe(5);
+    let [piece] = await getPieces(db, reel.ideaId);
+    expect(piece.current.content).toMatchObject({ title: "Five hours back", body: "Agents save you five hours a week #ai" });
+    // Only what the video keeps is used: the false start is cut.
+    const request = (revisePiece.mock.calls[0] as unknown as [unknown, { request: string }])[1].request;
+    expect(request).toContain("Agents save");
+    expect(request).not.toContain("Let me start again.");
+
+    // Nothing empty, nothing written.
+    expect(await fillVideoText(writing, reel.id, 5)).toBe(5);
+    // Only the empty field is filled; the cover text Sam typed stays.
+    await savePieceEdit(db, reel.id, 5, { body: "", title: "Mine" });
+    expect(await fillVideoText(writing, reel.id, 6)).toBe(7);
+    [piece] = await getPieces(db, reel.ideaId);
+    expect(piece.current.content).toMatchObject({ title: "Mine", body: "Agents save you five hours a week #ai" });
+
+    // A writer that fails doesn't stop the video.
+    await savePieceEdit(db, reel.id, 7, { body: "" });
+    revisePiece.mockRejectedValueOnce(new Error("down"));
+    expect(await fillVideoText(writing, reel.id, 8)).toBe(8);
+  }, 60_000);
 
   it("needs no new video when only the caption changes", async () => {
     await upload(db, reel.id, 1);
