@@ -3,6 +3,8 @@ import type { NextConfig } from "next";
 const config: NextConfig = {
   // The development badge would sit on top of the side menu.
   devIndicators: false,
+  // `npm run demo` builds into its own folder, so it can run next to your own studio.
+  ...(process.env.STUDIO_DEMO === "1" ? { distDir: ".next-demo" } : {}),
   // PGlite loads a WASM build of Postgres at runtime, so it must not be bundled.
   // playwright-core drives the installed Chrome to draw slide images, so it must not be bundled either.
   // unpdf and mammoth read uploaded brand files on the server only, so they load from node_modules as they are.

@@ -43,6 +43,10 @@ Next, fill in the **Brand Kit** for each language. Ideas follow it closely, so t
 
 Keys: [OpenRouter](https://openrouter.ai/keys) (free models) or an Anthropic key, plus [Tavily](https://app.tavily.com) for news search. Every other setting is optional and explained in `.env.example`.
 
+### Try it with sample data
+
+`npm run demo` starts the studio with a made-up creator whose ideas, posts, results and calendar are already filled in, so every page has something to show. It keeps its own database in `.data/demo` and never touches yours. `npm run demo -- --fresh` starts it over, dated from today. A click-by-click demo script is in [docs/DEMO.md](docs/DEMO.md).
+
 ## Languages
 
 The interface is in English or Farsi. Content can be written in English, Farsi, Arabic, Spanish, French, German, Italian, Portuguese, Dutch, Swedish, Polish, Turkish, Indonesian, Russian or Ukrainian. Right-to-left languages, captions and slides work out of the box.

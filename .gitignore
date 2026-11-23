@@ -1,5 +1,6 @@
 node_modules/
 .next/
+.next-demo/
 .data/
 .env*
 !.env.example
