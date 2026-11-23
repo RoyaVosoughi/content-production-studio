@@ -7,8 +7,9 @@ import { languageName, textDirection, uiLocale, type UiLanguage as Language } fr
 import { readyPage } from "@/lib/view";
 import { platformLabel, PLATFORMS, RESULT_METRICS, type Metric, type Platform } from "@/lib/platforms";
 import { bestAndWorst, patternsOf, weeklySummary, type Group } from "@/lib/insights";
-import { hookOverview, MIN_TO_COMPARE, pillarSummary, resultsOverview, type RankedRow, type Standing } from "@/lib/results";
+import { hookOverview, MIN_TO_COMPARE, pillarSummary, resultsOverview, type RankedRow } from "@/lib/results";
 import type { HookTally } from "@/lib/hooks";
+import { ScoreBar, StandingBadge } from "@/components/results-parts";
 
 export const dynamic = "force-dynamic";
 
@@ -34,9 +35,14 @@ export default async function ResultsPage({ params }: { params: Promise<{ lang: 
     <>
       <h1 className="font-display text-4xl font-semibold leading-tight md:text-5xl">{t.resultsTitle}</h1>
       <p className="mt-3 max-w-2xl text-ink-soft">{t.resultsIntro}</p>
-      <Link href={`/${lang}/results/report`} className="btn btn-quiet mt-4" data-report-link>
-        {t.report.link}
-      </Link>
+      <div className="mt-4 flex flex-wrap gap-2">
+        <Link href={`/${lang}/results/week`} className="btn btn-primary" data-weekly-link>
+          {t.weekly.link}
+        </Link>
+        <Link href={`/${lang}/results/report`} className="btn btn-quiet" data-report-link>
+          {t.report.link}
+        </Link>
+      </div>
 
       {rows.length === 0 ? (
         <p className="mt-8 rounded-xl bg-paper p-5">{t.resultsNoPosts}</p>
@@ -204,34 +210,6 @@ function ResultsForm({ row, t }: { row: RankedRow; t: Strings }) {
         {row.numbers ? t.resultsUpdate : t.resultsSave}
       </SubmitButton>
     </ActionForm>
-  );
-}
-
-const BADGE: Record<Standing, string> = {
-  strong: "bg-navy text-ink",
-  average: "bg-mist text-ink-soft",
-  weak: "border border-amber text-amber-deep",
-  early: "bg-mist text-ink-soft",
-};
-
-function StandingBadge({ standing, score, language, t }: { standing: Standing; score: number | null; language: Language; t: Strings }) {
-  return (
-    <span data-standing={standing} className={`shrink-0 rounded-full px-3 py-1 text-sm font-semibold ${BADGE[standing]}`}>
-      {t.standing[standing]}
-      {score !== null && <span className="ms-2 font-normal">{t.resultsScore.replace("{score}", formatNumber(language)(score, 1))}</span>}
-    </span>
-  );
-}
-
-/** A score drawn against a mark for a typical post, so above and below typical read at a glance. */
-function ScoreBar({ score }: { score: number }) {
-  const max = 3;
-  const width = Math.min(score, max) / max;
-  return (
-    <div className="relative mt-1 h-2 rounded-full bg-mist" aria-hidden>
-      <div className={`h-2 rounded-full ${score >= 1 ? "bg-cobalt" : "bg-amber"}`} style={{ width: `${width * 100}%` }} />
-      <div className="absolute -top-1 h-4 w-0.5 bg-ink" style={{ insetInlineStart: `${100 / max}%` }} />
-    </div>
   );
 }
 
