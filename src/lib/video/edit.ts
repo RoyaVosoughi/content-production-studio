@@ -44,40 +44,148 @@ export function buildPhrases(words: Word[]): Phrase[] {
   return phrases;
 }
 
-/** A pause the audio really has, as FFmpeg hears it. */
+/** A pause the audio really has. */
 export type Silence = { start: number; end: number };
-/** Pauses at least this long are taken out of the words Whisper laid over them. */
-const FIT_PAUSE = 0.3;
+
+/** The audio is measured in steps this long. */
+export const LEVEL_STEP = 0.05;
+/** Quiet this long counts as a pause. */
+const MIN_PAUSE = 0.3;
+/** Where quiet ends and speech starts, from the room's silence up towards the voice. */
+const SPEECH_SHARE = 0.35;
+/** A clip with less than this between its quiet and its voice is too noisy to tell them apart. */
+const MIN_RANGE_DB = 15;
 
 /**
- * Whisper's word times often run over the pauses around a word: one word can seem to last seven
- * seconds when most of it is silence. This trims each word to the speech the audio really has, so
- * shortening pauses, captions and the finished length all see the real pauses. A word that falls
- * wholly inside a pause is quiet speech the pause detection missed, and stays as it was.
+ * The pauses in a clip, from its loudness in steps of LEVEL_STEP seconds. The line between quiet and
+ * speech comes from the clip itself: a set level would hear the soft end of a sentence as silence
+ * in a quiet room, and hear nothing as silence in a noisy one.
  */
-export function fitWordsToAudio(words: Word[], silences: Silence[]): Word[] {
-  const pauses = silences.filter((pause) => pause.end - pause.start >= FIT_PAUSE).sort((a, b) => a.start - b.start);
-  return words.map((word) => {
-    let { start, end } = word;
-    for (const pause of pauses) {
-      if (pause.end <= start || pause.start >= end) continue;
-      if (pause.start <= start && pause.end >= end) return word;
-      if (pause.start <= start) start = pause.end;
-      else if (pause.end >= end) end = pause.start;
-      // A pause inside the word: the word is on the longer side of it.
-      else if (pause.start - start >= end - pause.end) end = pause.start;
-      else start = pause.end;
+export function pausesFromLevels(levels: number[]): Silence[] {
+  if (levels.length === 0) return [];
+  const sorted = [...levels].sort((a, b) => a - b);
+  const at = (share: number) => sorted[Math.floor(share * (sorted.length - 1))];
+  const quiet = at(0.1);
+  const voice = at(0.95);
+  if (voice - quiet < MIN_RANGE_DB) return [];
+  const line = quiet + SPEECH_SHARE * (voice - quiet);
+  const pauses: Silence[] = [];
+  let from: number | null = null;
+  const close = (to: number) => {
+    if (from !== null && (to - from) * LEVEL_STEP >= MIN_PAUSE) pauses.push({ start: from * LEVEL_STEP, end: to * LEVEL_STEP });
+    from = null;
+  };
+  levels.forEach((level, index) => {
+    if (level < line) from ??= index;
+    else close(index);
+  });
+  close(levels.length);
+  return pauses;
+}
+
+/** The loudness of mono samples in decibels, one value per LEVEL_STEP. */
+export function levelsOf(samples: Float32Array, rate: number): number[] {
+  const size = Math.round(rate * LEVEL_STEP);
+  const levels: number[] = [];
+  for (let at = 0; at + size <= samples.length; at += size) {
+    let sum = 0;
+    for (let index = at; index < at + size; index++) sum += samples[index] * samples[index];
+    levels.push(10 * Math.log10(sum / size + 1e-12));
+  }
+  return levels;
+}
+
+/** Words this close together count as piled on one moment. */
+const PILE = 0.02;
+
+/** Words Whisper failed to time: two or more stacked on one moment, or set after the words that follow. */
+function piledFlags(words: Word[]): boolean[] {
+  const flags = words.map(() => false);
+  words.forEach((word, index) => {
+    const next = words[index + 1];
+    if (next && Math.abs(next.start - word.start) < PILE && word.end - word.start < PILE) flags[index] = flags[index + 1] = true;
+    if (next && word.start > next.start + PILE) flags[index] = true;
+  });
+  return flags;
+}
+
+export function hasPiledWords(phrases: Phrase[]): boolean {
+  return piledFlags(phrases.flatMap((phrase) => phrase.words)).some(Boolean);
+}
+
+/**
+ * Whisper sometimes gives a stretch of words one and the same time, or a time past the end of its
+ * part of the clip, and the speech between them then belongs to no phrase and is lost from the
+ * video. Those words are spread over the speech between the words around them, in proportion to
+ * their length, skipping the audio's pauses: close to where they were said.
+ */
+export function spreadPiledWords(words: Word[], pauses: Silence[], duration: number): Word[] {
+  const flags = piledFlags(words);
+  const result = words.map((word) => ({ ...word }));
+  for (let index = 0; index < words.length; index++) {
+    if (!flags[index]) continue;
+    let last = index;
+    while (last + 1 < words.length && flags[last + 1]) last++;
+    const from = index > 0 ? result[index - 1].end : 0;
+    const to = last + 1 < words.length ? words[last + 1].start : duration;
+    if (to > from) {
+      // The speech in between: the span without its pauses, or all of it if that leaves nothing.
+      let voiced: Range[] = [{ start: from, end: to }];
+      for (const pause of pauses) {
+        voiced = voiced.flatMap((part) =>
+          pause.end <= part.start || pause.start >= part.end
+            ? [part]
+            : [{ start: part.start, end: pause.start }, { start: pause.end, end: part.end }].filter((piece) => piece.end - piece.start > 0.05),
+        );
+      }
+      if (outputDuration(voiced) < 0.2) voiced = [{ start: from, end: to }];
+      const total = outputDuration(voiced);
+      // Time along the speech, back to a time in the clip.
+      const place = (along: number) => {
+        let left = along;
+        for (const part of voiced) {
+          if (left <= part.end - part.start) return part.start + left;
+          left -= part.end - part.start;
+        }
+        return voiced[voiced.length - 1].end;
+      };
+      const run = words.slice(index, last + 1);
+      const weight = run.reduce((sum, word) => sum + word.text.length + 1, 0);
+      let along = 0;
+      run.forEach((word, offset) => {
+        const length = ((word.text.length + 1) / weight) * total;
+        result[index + offset] = { ...word, start: place(along), end: place(along + length) };
+        along += length;
+      });
     }
-    return end > start ? { ...word, start, end } : word;
+    index = last;
+  }
+  return result;
+}
+
+/** The same, for a clip's phrases: each keeps its words, so edit plans made on them still work. */
+export function spreadPiledPhrases(phrases: Phrase[], pauses: Silence[], duration: number): Phrase[] {
+  const spread = spreadPiledWords(phrases.flatMap((phrase) => phrase.words), pauses, duration);
+  let at = 0;
+  return phrases.map((phrase) => {
+    const words = spread.slice(at, (at += phrase.words.length));
+    if (words.length === 0) return phrase;
+    return { ...phrase, start: words[0].start, end: Math.max(...words.map((word) => word.end)), words };
   });
 }
 
-/** The same phrases with their words fitted to the audio, so plans made on them still point at the right phrases. */
-export function fitPhrasesToAudio(phrases: Phrase[], silences: Silence[]): Phrase[] {
+/**
+ * For clips whose words an earlier version trimmed to pauses it heard wrongly: a word edge that
+ * sits exactly on one of those pauses is put back to the far side of it. The real pauses are taken
+ * out when the video is made, so a word that reaches too far costs nothing, and one cut short loses speech.
+ */
+export function untrimPhrases(phrases: Phrase[], trimmedAt: Silence[]): Phrase[] {
+  const starts = new Map(trimmedAt.map((pause) => [pause.start, pause.end]));
+  const ends = new Map(trimmedAt.map((pause) => [pause.end, pause.start]));
   return phrases.map((phrase) => {
-    const words = fitWordsToAudio(phrase.words, silences);
+    const words = phrase.words.map((word) => ({ ...word, start: ends.get(word.start) ?? word.start, end: starts.get(word.end) ?? word.end }));
     if (words.length === 0) return phrase;
-    return { ...phrase, start: words[0].start, end: Math.max(...words.map((word) => word.end)), words };
+    return { ...phrase, start: Math.min(phrase.start, ...words.map((word) => word.start)), end: Math.max(phrase.end, ...words.map((word) => word.end)), words };
   });
 }
 
@@ -88,25 +196,56 @@ export function keepRanges(
   duration: number,
   silences: Silence[] = [],
 ): Range[] {
-  const kept = speechRanges(phrases, plan, duration);
-  return plan.tightenPauses && silences.length > 0 ? withoutPauses(kept, silences) : kept;
+  // With the audio's own pauses, only they decide what is quiet: word times can be off.
+  if (plan.tightenPauses && silences.length > 0) {
+    return withoutPauses(toSpeechEnd(speechRanges(phrases, plan, duration, false), phrases, plan.cut, silences, duration), silences);
+  }
+  return speechRanges(phrases, plan, duration, plan.tightenPauses);
 }
 
 /** Audio pauses at least this long are shortened when tightenPauses is on... */
 const CUT_PAUSE = 0.6;
-/** ...to this much quiet on each side, so the cut sounds like a breath, not a jump. */
-const PAUSE_ROOM = 0.15;
+/** ...to this much quiet after speech, so a sentence's soft ending is never clipped... */
+const ROOM_AFTER = 0.3;
+/** ...and this much before the next, so the cut sounds like a breath, not a jump. */
+const ROOM_BEFORE = 0.15;
 /** A sliver left between two cuts is too short to hear as speech. */
 const SLIVER = 0.12;
 
+/** How far past Whisper's end of a phrase the speech may still run. */
+const SPEECH_REACH = 1;
+
+/**
+ * Whisper sometimes ends a phrase before its last word is finished. Each kept part runs on to the
+ * pause that really ends it, a second at most, and never into a phrase that was cut.
+ */
+function toSpeechEnd(ranges: Range[], phrases: Phrase[], cut: number[], silences: Silence[], duration: number): Range[] {
+  const cutStarts = cut.map((index) => phrases[index]?.start).filter((start): start is number => start !== undefined);
+  const reached = ranges.map((range) => {
+    if (silences.some((pause) => pause.start <= range.end && pause.end > range.end)) return range;
+    const pause = silences.filter((item) => item.start > range.end).reduce<number>((first, item) => Math.min(first, item.start + ROOM_AFTER), duration);
+    const nextCut = cutStarts.filter((start) => start >= range.end).reduce<number>((first, start) => Math.min(first, start), duration);
+    return { start: range.start, end: Math.max(range.end, Math.min(pause, nextCut, range.end + SPEECH_REACH, duration)) };
+  });
+  // A part that now reaches the next one joins it, so nothing plays twice.
+  const merged: Range[] = [];
+  for (const range of reached) {
+    const last = merged[merged.length - 1];
+    if (last && range.start <= last.end) last.end = Math.max(last.end, range.end);
+    else merged.push({ ...range });
+  }
+  return merged;
+}
+
 /**
  * Takes the pauses the audio really has out of the kept parts. Word times can't be trusted for
- * this on their own: Whisper sometimes puts whole words inside a silence.
+ * this: Whisper runs words over pauses, and sometimes ends them before the speech does.
  */
 function withoutPauses(ranges: Range[], silences: Silence[]): Range[] {
   const gaps = silences
     .filter((pause) => pause.end - pause.start >= CUT_PAUSE)
-    .map((pause) => ({ start: pause.start + PAUSE_ROOM, end: pause.end - PAUSE_ROOM }))
+    .filter((pause) => pause.end - pause.start > ROOM_AFTER + ROOM_BEFORE)
+    .map((pause) => ({ start: pause.start + ROOM_AFTER, end: pause.end - ROOM_BEFORE }))
     .sort((a, b) => a.start - b.start);
   const result: Range[] = [];
   for (const range of ranges) {
@@ -121,13 +260,13 @@ function withoutPauses(ranges: Range[], silences: Silence[]): Range[] {
   return result.filter((range) => range.end - range.start >= SLIVER);
 }
 
-function speechRanges(phrases: Phrase[], plan: Pick<EditPlan, "cut" | "tightenPauses">, duration: number): Range[] {
+function speechRanges(phrases: Phrase[], plan: Pick<EditPlan, "cut">, duration: number, tighten: boolean): Range[] {
   const cut = new Set(plan.cut);
   const ranges: Range[] = [];
   for (const [index, phrase] of phrases.entries()) {
     if (cut.has(index)) continue;
     const pieces: Range[] = [];
-    if (plan.tightenPauses) {
+    if (tighten) {
       // Split the phrase at long pauses between its words.
       let start = phrase.words[0]?.start ?? phrase.start;
       for (let at = 1; at < phrase.words.length; at++) {
@@ -150,7 +289,7 @@ function speechRanges(phrases: Phrase[], plan: Pick<EditPlan, "cut" | "tightenPa
     const end = Math.min(duration, range.end);
     if (end <= start) continue;
     const last = merged[merged.length - 1];
-    const joinGap = plan.tightenPauses ? 0 : 1.5;
+    const joinGap = tighten ? 0 : 1.5;
     if (last && start - last.end <= joinGap) last.end = Math.max(last.end, end);
     else merged.push({ start, end });
   }

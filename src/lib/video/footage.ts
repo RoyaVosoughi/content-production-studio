@@ -9,7 +9,7 @@ import { eq } from "drizzle-orm";
 import type { Db } from "../db/client";
 import { footage, type Phrase } from "../db/schema";
 import { StudioError } from "../errors";
-import { buildPhrases, fitPhrasesToAudio, fitWordsToAudio, type Silence } from "./edit";
+import { buildPhrases, hasPiledWords, LEVEL_STEP, levelsOf, pausesFromLevels, spreadPiledPhrases, spreadPiledWords, untrimPhrases, type Silence } from "./edit";
 import { DATA_DIR, FFMPEG, FOOTAGE_DIR, MODEL_DIR, probe, run, stallGuard } from "./tools";
 
 // Clips stay on this computer. Turning speech into text runs here too, with a free Whisper model.
@@ -200,10 +200,12 @@ export async function processFootage(db: Db, id: string, transcribe: Transcriber
         report({ stage, progress });
       },
     });
-    // Whisper's word times run over pauses; the audio's own pauses put them right.
-    const phrases = buildPhrases(fitWordsToAudio(words, silences));
+    // The pauses "Remove silences" takes out, measured on the audio itself. They also place words
+    // Whisper couldn't time.
+    const pauses = pausesFromLevels(levelsOf(await readSamples(audioFile), 16000));
+    const phrases = buildPhrases(spreadPiledWords(words, pauses, info.duration));
     if (phrases.length === 0) throw new StudioError("No speech was found in this clip. Check that your microphone recorded, then upload it again.");
-    await set({ status: "ready", stage: null, progress: null, phrases, silences });
+    await set({ status: "ready", stage: null, progress: null, phrases, pauses });
   } catch (error) {
     if (!(error instanceof StudioError)) console.error(error);
     await set({
@@ -257,27 +259,65 @@ export async function detectSilences(file: string, minSeconds = 0.25): Promise<{
   return silences;
 }
 
-const fitting = ((globalThis as unknown as { __studioFitting?: Map<string, Promise<Silence[]>> }).__studioFitting ??= new Map());
+async function readSamples(file: string): Promise<Float32Array> {
+  const { readFile } = await import("node:fs/promises");
+  const bytes = await readFile(/*turbopackIgnore: true*/ file);
+  return new Float32Array(bytes.buffer, bytes.byteOffset, Math.floor(bytes.length / 4));
+}
+
+/** The loudness of a clip's sound, measured as FFmpeg decodes it, without keeping the audio. */
+export async function clipLevels(file: string): Promise<number[]> {
+  const { spawn } = await import("node:child_process");
+  const rate = 16000;
+  const size = Math.round(rate * LEVEL_STEP) * 4;
+  return new Promise((resolve, reject) => {
+    const child = spawn(FFMPEG(), ["-hide_banner", "-nostats", "-loglevel", "error", "-i", file, "-vn", "-ac", "1", "-ar", String(rate), "-f", "f32le", "-"], {
+      windowsHide: true,
+    });
+    const levels: number[] = [];
+    let rest = Buffer.alloc(0);
+    child.stdout.on("data", (chunk: Buffer) => {
+      const bytes = rest.length ? Buffer.concat([rest, chunk]) : chunk;
+      const whole = bytes.length - (bytes.length % size);
+      const copy = Buffer.from(bytes.subarray(0, whole));
+      levels.push(...levelsOf(new Float32Array(copy.buffer, copy.byteOffset, whole / 4), rate));
+      rest = Buffer.from(bytes.subarray(whole));
+    });
+    child.on("error", reject);
+    child.on("close", (code) => (code === 0 ? resolve(levels) : reject(new Error(`ffmpeg exited with ${code}`))));
+  });
+}
+
+const measuring = ((globalThis as unknown as { __studioPauses?: Map<string, Promise<Silence[]>> }).__studioPauses ??= new Map());
 
 /**
- * A clip read before the studio listened for its pauses gets them once, and its words are fitted to
- * them. Its phrases stay the same phrases, so edit plans made on them still work.
+ * A clip read before the studio measured its pauses gets them once. If an earlier version trimmed
+ * its words to pauses it heard wrongly, that trimming is undone, and words Whisper piled on one
+ * moment are spread out, so no speech is lost. The phrases stay the same phrases, so edit plans
+ * made on them still work.
  */
-export function pausesOf(db: Db, clip: { id: string; file: string; phrases: Phrase[]; silences: Silence[] | null }): Promise<Silence[]> {
-  if (clip.silences) return Promise.resolve(clip.silences);
-  const running = fitting.get(clip.id);
+export function pausesOf(
+  db: Db,
+  clip: { id: string; file: string; duration: number; phrases: Phrase[]; silences: Silence[] | null; pauses: Silence[] | null },
+): Promise<Silence[]> {
+  if (clip.pauses && !hasPiledWords(clip.phrases)) return Promise.resolve(clip.pauses);
+  const running = measuring.get(clip.id);
   if (running) return running;
   const work = (async () => {
     const file = footagePath(clip.file);
     // A clip whose file can't be read keeps working as before, just without the audio's pauses.
-    const silences = (file ? await detectSilences(file).catch(() => null) : null) ?? [];
-    await db
-      .update(footage)
-      .set({ silences, phrases: fitPhrasesToAudio(clip.phrases, silences), updatedAt: new Date() })
-      .where(eq(footage.id, clip.id));
-    return silences;
-  })().finally(() => fitting.delete(clip.id));
-  fitting.set(clip.id, work);
+    let pauses = clip.pauses;
+    if (!pauses) {
+      const levels = file ? await clipLevels(file).catch(() => null) : null;
+      pauses = levels ? pausesFromLevels(levels) : [];
+    }
+    // Undo an earlier version's trimming, then place the words Whisper couldn't time.
+    const untrimmed = clip.silences && !clip.pauses ? untrimPhrases(clip.phrases, clip.silences) : clip.phrases;
+    const phrases = spreadPiledPhrases(untrimmed, pauses, clip.duration);
+    await db.update(footage).set({ pauses, phrases, updatedAt: new Date() }).where(eq(footage.id, clip.id));
+    return pauses;
+  })().finally(() => measuring.delete(clip.id));
+  measuring.set(clip.id, work);
   return work;
 }
 

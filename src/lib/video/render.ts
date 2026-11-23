@@ -41,7 +41,7 @@ import { FFMPEG, filterPath, FONT_DIR, run, VIDEO_DIR } from "./tools";
 /** Change this when the editing changes, so videos made the old way are made again. */
 export const RENDER_VERSION = 2;
 /** Change this when shortening pauses changes: only videos that shorten them are made again. */
-const PAUSES_VERSION = 1;
+const PAUSES_VERSION = 2;
 
 const TITLE_AT = 0.3;
 const TITLE_FOR = 3.2;

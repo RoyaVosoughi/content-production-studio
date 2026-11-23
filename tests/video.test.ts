@@ -32,9 +32,11 @@ import {
   captionFile,
   chapterLines,
   cleanPlan,
-  fitPhrasesToAudio,
-  fitWordsToAudio,
   keepRanges,
+  levelsOf,
+  pausesFromLevels,
+  spreadPiledWords,
+  untrimPhrases,
   outputDuration,
   simplePlan,
   toOutputTime,
@@ -99,28 +101,55 @@ describe("editing logic", () => {
     expect(ranges).toHaveLength(2);
   });
 
-  it("fits words to the pauses the audio really has", () => {
-    // Whisper says "So" lasted five seconds; the audio was silent for most of it.
-    const stretched = [word("Agents", 0.2, 0.7), word("So", 1.0, 6.2), word("here.", 6.2, 6.6)];
-    const fitted = fitWordsToAudio(stretched, [{ start: 0.8, end: 5.8 }]);
-    expect(fitted[1]).toMatchObject({ start: 5.8, end: 6.2 });
-    expect(fitted[0]).toEqual(stretched[0]);
-    // A word wholly inside a pause is left as it was, and phrases keep their numbers.
-    expect(fitWordsToAudio([word("hm", 2, 2.5)], [{ start: 1, end: 3 }])[0]).toMatchObject({ start: 2, end: 2.5 });
-    const refitted = fitPhrasesToAudio(phrases, [{ start: 8.6, end: 9.75 }]);
-    expect(refitted).toHaveLength(phrases.length);
-    expect(refitted[3].end).toBeCloseTo(8.6);
+  it("hears pauses against the clip's own loudness, so a soft sentence ending stays speech", () => {
+    // A quiet room (-85 dB), a voice around -30 dB, and a sentence that fades to -55 dB before stopping.
+    const levels = [...Array(20).fill(-30), ...Array(6).fill(-55), ...Array(30).fill(-85), ...Array(20).fill(-30)];
+    expect(pausesFromLevels(levels)).toEqual([{ start: 1.3, end: expect.closeTo(2.8, 5) }]);
+    // Too noisy to tell quiet from voice: no pauses at all, rather than cutting speech.
+    expect(pausesFromLevels([...Array(20).fill(-30), ...Array(20).fill(-38)])).toEqual([]);
+    // Loudness is measured in 50 ms steps.
+    const samples = new Float32Array(1600).fill(0.1);
+    expect(levelsOf(samples, 16000)).toHaveLength(2);
+    expect(levelsOf(samples, 16000)[0]).toBeCloseTo(-20);
+  });
+
+  it("spreads words Whisper piled on one moment over the speech they came from", () => {
+    // Whisper heard "one two three" but timed them all at 9 seconds, past the words that follow.
+    const piled = [word("Hello.", 0, 0.5), word("one", 9, 9), word("two", 9, 9), word("three", 9, 9), word("Next", 6, 6.4)];
+    const spread = spreadPiledWords(piled, [{ start: 3, end: 4 }], 10);
+    const placed = spread.slice(1, 4);
+    expect(placed[0].start).toBeCloseTo(0.5);
+    expect(placed[2].end).toBeCloseTo(6);
+    // In order, and never inside the pause.
+    placed.forEach((item, index) => {
+      expect(item.end).toBeGreaterThan(item.start);
+      if (index > 0) expect(item.start).toBeGreaterThanOrEqual(placed[index - 1].end - 1e-9);
+      expect(item.start >= 3 && item.end <= 4).toBe(false);
+    });
+    expect(spread[4]).toEqual(piled[4]);
+    // Well-timed words are left alone.
+    expect(spreadPiledWords(WORDS, [], 12)).toEqual(WORDS);
+  });
+
+  it("puts back word edges an earlier version trimmed to wrongly heard pauses", () => {
+    const trimmed = buildPhrases([word("Do", 0, 0.4), word("it", 0.4, 0.85)]);
+    const restored = untrimPhrases(trimmed, [{ start: 0.85, end: 3 }]);
+    expect(restored[0].words[1].end).toBe(3);
+    expect(restored[0].end).toBe(3);
   });
 
   it("takes out the pauses the audio has even where the word times are wrong", () => {
     // Whole words placed inside a four-second silence: the word times alone see no pause.
     const misplaced = buildPhrases([word("One", 0, 0.5), word("two", 0.5, 2.5), word("three", 2.5, 4.5), word("four.", 4.5, 5)]);
     const silences = [{ start: 0.6, end: 4.6 }];
-    const tight = keepRanges(misplaced, plan({ tightenPauses: true }), 6, silences);
-    expect(outputDuration(tight)).toBeLessThan(1.6);
+    const tight = keepRanges(misplaced, plan({ tightenPauses: true }), 5.3, silences);
+    expect(outputDuration(tight)).toBeLessThan(2);
     // Each cut leaves a breath of quiet on both sides.
-    expect(tight[0].end).toBeCloseTo(0.75);
+    expect(tight[0].end).toBeCloseTo(0.9);
     expect(tight[1].start).toBeCloseTo(4.45);
+    // Speech Whisper ended too early runs on to the pause that really ends it.
+    const early = buildPhrases([word("Say", 0, 0.3), word("it", 0.3, 0.5)]);
+    expect(keepRanges(early, plan({ tightenPauses: true }), 6, [{ start: 1.2, end: 5 }])[0].end).toBeCloseTo(1.5);
     // Only when asked.
     expect(outputDuration(keepRanges(misplaced, plan(), 6, silences))).toBeGreaterThan(5);
   });

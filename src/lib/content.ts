@@ -41,6 +41,7 @@ import {
   cleanPlan,
   defaultFraming,
   explainerStyleFor,
+  hasPiledWords,
   HIGHLIGHT_SECONDS,
   keptParts,
   MOMENTS_MIN_CLIP,
@@ -710,12 +711,12 @@ export async function markPostedByHand(db: Db, pieceId: string, version: number,
 async function readyClip(db: Db, id: string): Promise<Clip | null> {
   let [clip] = await db.select().from(footage).where(eq(footage.id, id));
   if (!clip || clip.status !== "ready" || !clip.phrases || !clip.duration || !clip.width || !clip.height) return null;
-  if (!clip.silences) {
-    // Read before the studio listened for pauses: fitted once, then read again.
-    await pausesOf(db, { ...clip, phrases: clip.phrases });
+  if (!clip.pauses || hasPiledWords(clip.phrases)) {
+    // Read before the studio measured its pauses or placed piled words: done once, then read again.
+    await pausesOf(db, { ...clip, duration: clip.duration, phrases: clip.phrases });
     [clip] = await db.select().from(footage).where(eq(footage.id, id));
   }
-  return { id: clip.id, file: clip.file, duration: clip.duration!, width: clip.width!, height: clip.height!, phrases: clip.phrases!, silences: clip.silences ?? [] };
+  return { id: clip.id, file: clip.file, duration: clip.duration!, width: clip.width!, height: clip.height!, phrases: clip.phrases!, silences: clip.pauses ?? [] };
 }
 
 async function requireVideoPiece(db: Db, pieceId: string) {
@@ -1016,7 +1017,7 @@ export async function videoState(db: Db, pieceId: string, platform: VideoPlatfor
   const row = clips.find((clip) => clip.id === content.footage) ?? null;
   const ready = row ? await readyClip(db, row.id) : null;
   const clip = row
-    ? { ...row, ...(ready ? { phrases: ready.phrases, silences: ready.silences } : {}), stopped: row.status === "processing" && !isRunning(`footage:${row.id}`) }
+    ? { ...row, ...(ready ? { phrases: ready.phrases } : {}), silences: ready?.silences ?? [], stopped: row.status === "processing" && !isRunning(`footage:${row.id}`) }
     : null;
   const problem = renderProblem(platform, content, ready);
   const key = ready && !problem ? renderKey(platform, language, ready.id, content, await brandForVideo(db, language)) : null;
