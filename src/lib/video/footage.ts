@@ -7,9 +7,9 @@ import { pipeline } from "node:stream/promises";
 import type { ReadableStream as WebReadableStream } from "node:stream/web";
 import { eq } from "drizzle-orm";
 import type { Db } from "../db/client";
-import { footage } from "../db/schema";
+import { footage, type Phrase } from "../db/schema";
 import { StudioError } from "../errors";
-import { buildPhrases } from "./edit";
+import { buildPhrases, fitPhrasesToAudio, fitWordsToAudio, type Silence } from "./edit";
 import { DATA_DIR, FFMPEG, FOOTAGE_DIR, MODEL_DIR, probe, run, stallGuard } from "./tools";
 
 // Clips stay on this computer. Turning speech into text runs here too, with a free Whisper model.
@@ -200,9 +200,10 @@ export async function processFootage(db: Db, id: string, transcribe: Transcriber
         report({ stage, progress });
       },
     });
-    const phrases = buildPhrases(words);
+    // Whisper's word times run over pauses; the audio's own pauses put them right.
+    const phrases = buildPhrases(fitWordsToAudio(words, silences));
     if (phrases.length === 0) throw new StudioError("No speech was found in this clip. Check that your microphone recorded, then upload it again.");
-    await set({ status: "ready", stage: null, progress: null, phrases });
+    await set({ status: "ready", stage: null, progress: null, phrases, silences });
   } catch (error) {
     if (!(error instanceof StudioError)) console.error(error);
     await set({
@@ -254,6 +255,30 @@ export async function detectSilences(file: string, minSeconds = 0.25): Promise<{
     }
   }
   return silences;
+}
+
+const fitting = ((globalThis as unknown as { __studioFitting?: Map<string, Promise<Silence[]>> }).__studioFitting ??= new Map());
+
+/**
+ * A clip read before the studio listened for its pauses gets them once, and its words are fitted to
+ * them. Its phrases stay the same phrases, so edit plans made on them still work.
+ */
+export function pausesOf(db: Db, clip: { id: string; file: string; phrases: Phrase[]; silences: Silence[] | null }): Promise<Silence[]> {
+  if (clip.silences) return Promise.resolve(clip.silences);
+  const running = fitting.get(clip.id);
+  if (running) return running;
+  const work = (async () => {
+    const file = footagePath(clip.file);
+    // A clip whose file can't be read keeps working as before, just without the audio's pauses.
+    const silences = (file ? await detectSilences(file).catch(() => null) : null) ?? [];
+    await db
+      .update(footage)
+      .set({ silences, phrases: fitPhrasesToAudio(clip.phrases, silences), updatedAt: new Date() })
+      .where(eq(footage.id, clip.id));
+    return silences;
+  })().finally(() => fitting.delete(clip.id));
+  fitting.set(clip.id, work);
+  return work;
 }
 
 /** Starts reading a clip in the background, unless that's already happening. */

@@ -50,7 +50,7 @@ import {
   SHORT_PLATFORMS,
   simplePlan,
 } from "./video/edit";
-import { isRunning, startProcessing, type Transcriber } from "./video/footage";
+import { isRunning, pausesOf, startProcessing, type Transcriber } from "./video/footage";
 import { brandForVideo, renderedFile, renderKey, renderProblem, startRender, type Clip, type DrawCards } from "./video/render";
 import { PUBLISHERS } from "./publishers";
 import { PublishRejected, type Publisher } from "./publishers/types";
@@ -708,9 +708,14 @@ export async function markPostedByHand(db: Db, pieceId: string, version: number,
 // ---- Video ----
 
 async function readyClip(db: Db, id: string): Promise<Clip | null> {
-  const [clip] = await db.select().from(footage).where(eq(footage.id, id));
+  let [clip] = await db.select().from(footage).where(eq(footage.id, id));
   if (!clip || clip.status !== "ready" || !clip.phrases || !clip.duration || !clip.width || !clip.height) return null;
-  return { id: clip.id, file: clip.file, duration: clip.duration, width: clip.width, height: clip.height, phrases: clip.phrases };
+  if (!clip.silences) {
+    // Read before the studio listened for pauses: fitted once, then read again.
+    await pausesOf(db, { ...clip, phrases: clip.phrases });
+    [clip] = await db.select().from(footage).where(eq(footage.id, id));
+  }
+  return { id: clip.id, file: clip.file, duration: clip.duration!, width: clip.width!, height: clip.height!, phrases: clip.phrases!, silences: clip.silences ?? [] };
 }
 
 async function requireVideoPiece(db: Db, pieceId: string) {
@@ -846,9 +851,12 @@ export async function findClipMoments({ db, writer }: StudioDeps, pieceId: strin
   await addVersion(db, pieceId, basedOn, { ...old.content, moments }, "ai", old.scenarioVersion);
 }
 
-/** The network a short video from a long clip goes to: a Reel, a Short or a LinkedIn video, not the long one's own. */
-function shortTarget(source: { platform: string }, target: string): VideoPlatform {
-  if (!SHORT_PLATFORMS.includes(target as VideoPlatform) || target === source.platform) {
+/**
+ * The network a short video from a long clip goes to: a Reel, a Short or a LinkedIn video. It can be
+ * the clip's own post, when a Reel's long take should become a short Reel.
+ */
+function shortTarget(target: string): VideoPlatform {
+  if (!SHORT_PLATFORMS.includes(target as VideoPlatform)) {
     throw new StudioError("Choose a Reel, a Short or a LinkedIn video.");
   }
   return target as VideoPlatform;
@@ -861,7 +869,7 @@ function shortTarget(source: { platform: string }, target: string): VideoPlatfor
  */
 async function placeShort(
   db: Db,
-  source: { ideaId: string },
+  source: { id: string; ideaId: string },
   platform: VideoPlatform,
   clip: Clip,
   short: { title: string; body: string; window?: { from: number; to: number }; parts?: { from: number; to: number }[] },
@@ -872,13 +880,16 @@ async function placeShort(
     ...short,
     title: short.title.slice(0, VIDEO_TITLE_LIMIT),
     footage: clip.id,
-    edit: cleanPlan({ ...simplePlan(short.title), framing: defaultFraming(platform, clip.width, clip.height), cut }, clip.phrases.length),
+    // A short video is tight: its long pauses are taken out from the start.
+    edit: cleanPlan({ ...simplePlan(short.title), tightenPauses: true, framing: defaultFraming(platform, clip.width, clip.height), cut }, clip.phrases.length),
   };
   const [existing] = await db.select().from(pieces).where(and(eq(pieces.ideaId, source.ideaId), eq(pieces.platform, platform)));
   if (existing) {
     const current = await pieceVersion(db, existing.id, existing.currentVersion);
     const { moments: _moments, thumbnailAt: _at, window: _window, parts: _parts, ...kept } = current.content;
-    await addVersion(db, existing.id, existing.currentVersion, { ...kept, ...content }, "edit", current.scenarioVersion);
+    // Shortening a post's own clip keeps the title and caption you wrote for it.
+    const own = existing.id === source.id ? { title: kept.title ?? content.title, body: kept.body || content.body } : {};
+    await addVersion(db, existing.id, existing.currentVersion, { ...kept, ...content, ...own }, "edit", current.scenarioVersion);
     return { ideaId: source.ideaId, pieceId: existing.id, platform };
   }
   const made = await db.transaction(async (tx) => {
@@ -893,7 +904,7 @@ async function placeShort(
 export async function makeShortFromMoment(db: Db, pieceId: string, version: number, index: number, target: string) {
   const source = await requireVideoPiece(db, pieceId);
   if (source.currentVersion !== version) throw new StudioError(STALE_PIECE);
-  const platform = shortTarget(source, target);
+  const platform = shortTarget(target);
   const { content, scenarioVersion } = await pieceVersion(db, pieceId, version);
   const moment = content.moments?.[index];
   const clip = content.footage ? await readyClip(db, content.footage) : null;
@@ -916,7 +927,7 @@ export async function makeShortFromMoment(db: Db, pieceId: string, version: numb
 export async function makeHighlights({ db, writer }: StudioDeps, pieceId: string, version: number, target: string, seconds: number) {
   const source = await requireVideoPiece(db, pieceId);
   if (source.currentVersion !== version) throw new StudioError(STALE_PIECE);
-  const platform = shortTarget(source, target);
+  const platform = shortTarget(target);
   const { content, scenarioVersion } = await pieceVersion(db, pieceId, version);
   const clip = content.footage ? await readyClip(db, content.footage) : null;
   if (!clip) throw new StudioError("Wait until your clip is ready, then make its main moments.");
@@ -1003,8 +1014,10 @@ export async function videoState(db: Db, pieceId: string, platform: VideoPlatfor
     .where(and(eq(footage.pairId, idea.pairId), eq(footage.language, language)))
     .orderBy(desc(footage.createdAt));
   const row = clips.find((clip) => clip.id === content.footage) ?? null;
-  const clip = row ? { ...row, stopped: row.status === "processing" && !isRunning(`footage:${row.id}`) } : null;
   const ready = row ? await readyClip(db, row.id) : null;
+  const clip = row
+    ? { ...row, ...(ready ? { phrases: ready.phrases, silences: ready.silences } : {}), stopped: row.status === "processing" && !isRunning(`footage:${row.id}`) }
+    : null;
   const problem = renderProblem(platform, content, ready);
   const key = ready && !problem ? renderKey(platform, language, ready.id, content, await brandForVideo(db, language)) : null;
   let render: VideoState["render"] = null;

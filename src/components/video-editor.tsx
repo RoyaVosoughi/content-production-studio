@@ -32,6 +32,7 @@ import {
   partsSeconds,
   SHORT_PLATFORMS,
   windowSeconds,
+  type Silence,
 } from "@/lib/video/edit";
 import { hasItems } from "@/lib/video/animation";
 import { THUMBNAIL_PLATFORMS } from "@/lib/video/overlays";
@@ -50,6 +51,8 @@ export type EditorVideo = {
     duration: number | null;
     originalName: string;
     phrases: Phrase[] | null;
+    /** The pauses heard in the audio, so the length shown matches the finished video. */
+    silences: Silence[];
   } | null;
   otherClips: { id: string; originalName: string; duration: number | null }[];
   render: { status: "working" | "ready" | "failed"; progress: number | null; error: string | null; stopped: boolean } | null;
@@ -69,6 +72,73 @@ function useRefreshWhile(busy: boolean) {
     const timer = setInterval(() => router.refresh(), 2000);
     return () => clearInterval(timer);
   }, [busy, router]);
+}
+
+type StepState = "done" | "active" | "open" | "locked";
+
+/** One numbered step of making a video. A locked step only says what has to happen first. */
+function Step({
+  number,
+  title,
+  hint,
+  state,
+  language,
+  t,
+  children,
+}: {
+  number: number;
+  title: string;
+  hint?: string;
+  state: StepState;
+  language: Language;
+  t: Strings;
+  children?: React.ReactNode;
+}) {
+  const frame = {
+    done: "border-mist",
+    active: "border-cobalt/70 bg-deep/40",
+    open: "border-mist",
+    locked: "border-mist opacity-60",
+  }[state];
+  const badge = {
+    done: "bg-cobalt text-canvas",
+    active: "border-2 border-cobalt text-cobalt",
+    open: "border border-steel text-fog",
+    locked: "border border-steel text-fog",
+  }[state];
+  return (
+    <section aria-label={title} data-step={number} data-state={state} className={`rounded-xl border p-4 md:p-5 ${frame}`}>
+      <div className="flex items-start gap-3">
+        <span aria-hidden className={`grid size-8 shrink-0 place-items-center rounded-full text-sm font-semibold ${badge}`}>
+          {state === "done" ? "✓" : number.toLocaleString(uiLocale(language))}
+        </span>
+        <div className="min-w-0 flex-1 space-y-4">
+          <div>
+            <h3 className="font-display text-lg font-semibold">
+              {title}
+              {state === "done" && <span className="sr-only"> · {t.videoSteps.done}</span>}
+            </h3>
+            {hint && <p className="mt-0.5 text-sm text-ink-soft">{hint}</p>}
+          </div>
+          {state !== "locked" && children}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/** An on/off option that reads as a switch. */
+function Toggle({ checked, onChange, children }: { checked: boolean; onChange: (on: boolean) => void; children: React.ReactNode }) {
+  return (
+    <label
+      className={`flex cursor-pointer items-center gap-2 rounded-full border px-3 py-1.5 text-sm font-medium transition-colors ${
+        checked ? "border-cobalt bg-cobalt/15 text-ink" : "border-mist text-ink-soft"
+      }`}
+    >
+      <input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} className="size-4 accent-cobalt" />
+      {children}
+    </label>
+  );
 }
 
 /** Remount with key={version} so the fields always match the current version. */
@@ -93,6 +163,7 @@ export function VideoEditor({
   t: Strings;
 }) {
   const platform = piece.platform as VideoPlatform;
+  const s = t.videoSteps;
   const formId = useId();
   const [content, setContent] = useState(piece.content);
   const [dirty, setDirty] = useState(false);
@@ -103,7 +174,9 @@ export function VideoEditor({
   const sourceRef = useRef<HTMLVideoElement>(null);
 
   const { clip, render } = video;
-  const phrases = clip?.status === "ready" ? (clip.phrases ?? []) : [];
+  const clipReady = clip?.status === "ready";
+  const phrases = clipReady ? (clip.phrases ?? []) : [];
+  const silences = clipReady ? clip.silences : [];
   useRefreshWhile((clip?.status === "processing" && !clip.stopped) || (render?.status === "working" && !render.stopped));
 
   const canEdit = piece.state === "draft" || piece.state === "failed";
@@ -120,10 +193,31 @@ export function VideoEditor({
   const wide = VIDEO_FORMATS[platform].width > VIDEO_FORMATS[platform].height;
   const hasTitle = platform === "youtube" || platform === "short";
   const chapters =
-    platform === "youtube" && content.edit && clip?.duration ? chapterLines(phrases, content.edit, clip.duration) : [];
+    platform === "youtube" && content.edit && clip?.duration ? chapterLines(phrases, content.edit, clip.duration, silences) : [];
+  const limit = VIDEO_FORMATS[platform].maxSeconds;
+  const partOfClip = Boolean(content.window || content.parts?.length);
+  const longClip = clipReady && (clip.duration ?? 0) >= MOMENTS_MIN_CLIP && !partOfClip;
 
-  return (
-    <article className="rounded-xl bg-paper p-5 md:p-6" data-platform={platform}>
+  const finished = videoReady ? (
+    <div className="space-y-3">
+      <video
+        key={src}
+        src={src}
+        controls
+        playsInline
+        className={`w-full rounded-lg bg-black ${wide ? "aspect-video" : "mx-auto max-h-[560px] w-auto"}`}
+        data-finished-video
+      />
+      {THUMBNAIL_PLATFORMS.includes(platform) && (
+        // The studio's own thumbnail for this version.
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={`${src}&thumbnail=1`} alt={t.downloadThumbnail} className={`rounded-lg ${wide ? "w-full" : "h-48"}`} />
+      )}
+    </div>
+  ) : null;
+
+  const header = (
+    <>
       <h2 className="font-display text-2xl font-semibold">
         {platformLabel(platform, language)}{" "}
         <span className="label">
@@ -131,202 +225,259 @@ export function VideoEditor({
         </span>
       </h2>
       <PublishStatus piece={piece} language={language} t={t} />
+    </>
+  );
 
-      {/* The script comes first: it's what you film from, so it reads in full before anything else. */}
-      {content.script && content.script.length > 0 && (
-        <section data-script-preview aria-label={t.scriptTitle} className="mt-4 rounded-lg border-s-4 border-cobalt bg-canvas p-4">
-          <p className="label">{t.scriptTitle}</p>
-          <ol className="mt-3 space-y-3">
-            {content.script.map((part, index) => (
-              <li key={index} className="flex gap-3">
-                <span aria-hidden className="font-display text-lg font-semibold text-cobalt">
-                  {(index + 1).toLocaleString(uiLocale(language))}
-                </span>
-                <div className="min-w-0">
-                  <p dir="auto" className="leading-relaxed">
-                    {part.say}
-                  </p>
-                  {part.show && (
-                    <p className="mt-1 text-sm text-ink-soft">
-                      <span className="font-semibold">{t.scriptShow}:</span> <bdi>{part.show}</bdi>
-                    </p>
-                  )}
-                </div>
-              </li>
-            ))}
-          </ol>
-        </section>
-      )}
-
-      <div className="mt-4 grid gap-5 lg:grid-cols-2">
-        <div className="min-w-0">
-          <p className="label mb-2">{t.finishedVideo}</p>
-          {videoReady ? (
-            <div className="space-y-3">
-              <video
-                key={src}
-                src={src}
-                controls
-                playsInline
-                className={`w-full rounded-lg bg-black ${wide ? "aspect-video" : "mx-auto max-h-[560px] w-auto"}`}
-                data-finished-video
-              />
-              {THUMBNAIL_PLATFORMS.includes(platform) && (
-                // The studio's own thumbnail for this version.
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={`${src}&thumbnail=1`} alt={t.downloadThumbnail} className={`rounded-lg ${wide ? "w-full" : "h-48"}`} />
-              )}
-            </div>
-          ) : (
-            <p className="rounded-lg bg-canvas p-4 text-sm text-ink-soft">{dirty ? t.videoNeedsSave : t.noVideoYet}</p>
-          )}
-          <div className="mt-3 rounded-lg border border-[#d9d4cc] bg-white p-3 text-sm text-[#1e1e1e]">
-            {content.title && <p className="font-semibold">{content.title}</p>}
-            <p className="mt-1 whitespace-pre-wrap break-words leading-relaxed">{content.body}</p>
-          </div>
+  // Posted, scheduled or on its way: the finished video and its text, nothing to change.
+  if (!canEdit) {
+    return (
+      <article className="rounded-xl bg-paper p-5 md:p-6" data-platform={platform}>
+        {header}
+        <div className="mt-4 grid gap-5 lg:grid-cols-2">
+          <div className="min-w-0">{finished ?? <p className="rounded-lg bg-canvas p-4 text-sm text-ink-soft">{t.noVideoYet}</p>}</div>
+          <PostPreview content={content} />
         </div>
+      </article>
+    );
+  }
 
-        {canEdit && (
-          <div className="min-w-0 space-y-3">
-            <p className="label">{t.editLabel}</p>
-            <label className="block">
-              <span className="label mb-1 flex justify-between gap-2">
-                <span>{hasTitle ? t.videoTitle : t.videoCoverText}</span>
-                <span dir="ltr" className={(content.title?.length ?? 0) > VIDEO_TITLE_LIMIT ? "font-bold text-danger" : ""}>
-                  {content.title?.length ?? 0} / {VIDEO_TITLE_LIMIT}
-                </span>
-              </span>
-              <input form={formId} name="videoTitle" value={content.title ?? ""} onChange={(event) => update({ title: event.target.value })} dir="auto" className="field" />
-            </label>
-            <label className="block">
-              <span className="label mb-1 flex justify-between gap-2">
-                <span>{hasTitle ? t.videoDescription : platform === "reel" ? t.caption : t.postBody}</span>
-                <span dir="ltr" className={content.body.length > BODY_LIMITS[platform] ? "font-bold text-danger" : ""}>
-                  {content.body.length} / {BODY_LIMITS[platform]}
-                </span>
-              </span>
-              <textarea form={formId} name="body" rows={hasTitle ? 10 : 7} value={content.body} onChange={(event) => update({ body: event.target.value })} dir="auto" className="field" />
-            </label>
-            {sources.length > 0 && (
-              <SourcesBox platform={platform} body={content.body} sources={sources} contentLanguage={contentLanguage} onChange={(body) => update({ body })} t={t} />
-            )}
-            {hasTitle ? (
-              <label className="block">
-                <span className="label mb-1 block">{t.videoTags}</span>
-                <input
-                  form={formId}
-                  name="videoTags"
-                  value={(content.tags ?? []).join(", ")}
-                  onChange={(event) => update({ tags: event.target.value.split(/[,،]/).map((tag) => tag.trimStart()) })}
-                  dir="auto" className="field"
-                />
-              </label>
-            ) : (
-              <input type="hidden" form={formId} name="videoTags" value="" />
-            )}
+  const done = { film: clipReady, edit: clipReady && Boolean(piece.content.edit), make: Boolean(videoReady) };
+  const active = !done.film ? 1 : !done.edit ? 2 : !done.make ? 3 : 4;
+  const stateOf = (number: number, isDone: boolean): StepState =>
+    isDone ? "done" : number === active ? "active" : number > active && number < 4 ? "locked" : "open";
+
+  return (
+    <article className="space-y-4 rounded-xl bg-paper p-5 md:p-6" data-platform={platform}>
+      <div>{header}</div>
+
+      {/* 1. Film from the script, then upload. */}
+      <Step number={1} title={s.filmTitle} hint={clip ? undefined : s.filmHint} state={stateOf(1, done.film)} language={language} t={t}>
+        {content.script && content.script.length > 0 && (
+          <details open={!clip} className="rounded-lg bg-canvas p-3" data-script-preview>
+            <summary className="cursor-pointer text-sm font-semibold">{s.script}</summary>
+            <ol className="mt-3 space-y-3">
+              {content.script.map((part, index) => (
+                <li key={index} className="flex gap-3">
+                  <span aria-hidden className="font-display text-lg font-semibold text-cobalt">
+                    {(index + 1).toLocaleString(uiLocale(language))}
+                  </span>
+                  <div className="min-w-0">
+                    <p dir="auto" className="leading-relaxed">
+                      {part.say}
+                    </p>
+                    {part.show && (
+                      <p className="mt-1 text-sm text-ink-soft">
+                        <span className="font-semibold">{t.scriptShow}:</span> <bdi>{part.show}</bdi>
+                      </p>
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ol>
+          </details>
+        )}
+        <ClipSection piece={piece} video={video} dirty={dirty} hidden={hidden} language={language} t={t} />
+        <details>
+          <summary className="cursor-pointer text-sm font-medium text-cobalt">{s.changeScript}</summary>
+          <div className="mt-3">
             <ScriptEditor formId={formId} script={content.script ?? []} onChange={(script) => update({ script })} t={t} />
           </div>
+        </details>
+      </Step>
+
+      {/* 2. The edit: one button, a few switches, and the fine detail out of the way. */}
+      <Step
+        number={2}
+        title={s.editTitle}
+        hint={clipReady ? s.editHint.replace("{limit}", formatTime(limit)) : s.editLocked}
+        state={stateOf(2, done.edit)}
+        language={language}
+        t={t}
+      >
+        {partOfClip && ((content.window && phrases[content.window.to]) || content.parts?.every((part) => phrases[part.to])) && (
+          <div className="space-y-2 rounded-lg border-s-4 border-cobalt bg-canvas p-3 text-sm" data-window>
+            <p>
+              {content.window
+                ? t.moments.window
+                    .replace("{from}", formatTime(phrases[content.window.from].start))
+                    .replace("{to}", formatTime(phrases[content.window.to].end))
+                    .replace("{duration}", formatTime(windowSeconds(content.window, phrases)))
+                : t.moments.parts
+                    .replace("{count}", (content.parts ?? []).length.toLocaleString(uiLocale(language)))
+                    .replace("{duration}", formatTime(partsSeconds(content.parts ?? [], phrases)))}
+            </p>
+            <ActionForm action={useWholeClipAction}>
+              {hidden}
+              <SubmitButton pendingLabel={t.moments.usingWholeClip} disabled={dirty}>
+                {t.moments.wholeClip}
+              </SubmitButton>
+            </ActionForm>
+          </div>
         )}
-      </div>
 
-      {canEdit && (
-        <div className="mt-5 space-y-4">
-          <ClipSection piece={piece} video={video} dirty={dirty} hidden={hidden} language={language} t={t} />
+        {longClip && SHORT_PLATFORMS.includes(platform) && (
+          <KeepBest platform={platform} duration={clip.duration ?? 0} dirty={dirty} hidden={hidden} language={language} t={t} />
+        )}
 
-          {((content.window && phrases[content.window.to]) || (content.parts?.length && content.parts.every((part) => phrases[part.to]))) && (
-            <div className="space-y-2 rounded-lg border-s-4 border-cobalt bg-canvas p-3 text-sm" data-window>
-              <p>
-                {content.window
-                  ? t.moments.window
-                      .replace("{from}", formatTime(phrases[content.window.from].start))
-                      .replace("{to}", formatTime(phrases[content.window.to].end))
-                      .replace("{duration}", formatTime(windowSeconds(content.window, phrases)))
-                  : t.moments.parts
-                      .replace("{count}", (content.parts ?? []).length.toLocaleString(uiLocale(language)))
-                      .replace("{duration}", formatTime(partsSeconds(content.parts ?? [], phrases)))}
-              </p>
-              <ActionForm action={useWholeClipAction} className="flex flex-wrap items-center gap-3">
-                {hidden}
-                <SubmitButton pendingLabel={t.moments.usingWholeClip} disabled={dirty}>
-                  {t.moments.wholeClip}
-                </SubmitButton>
-                <span className="text-ink-soft">{t.moments.wholeClipHint}</span>
-              </ActionForm>
-            </div>
-          )}
-
-          {clip?.status === "ready" && (clip.duration ?? 0) >= MOMENTS_MIN_CLIP && !content.window && !content.parts?.length && (
-            <MomentsSection
-              platform={platform}
-              moments={content.moments ?? []}
-              phrases={phrases}
-              taken={taken}
-              dirty={dirty}
-              hidden={hidden}
-              language={language}
-              t={t}
-            />
-          )}
-
-          {clip?.status === "ready" && (
-            <PlanSection
-              piece={piece}
-              platform={platform}
-              plan={content.edit}
-              phrases={phrases}
-              duration={clip.duration ?? 0}
-              clipId={clip.id}
-              sourceRef={sourceRef}
-              formId={formId}
-              thumbnailAt={content.thumbnailAt}
-              chapters={chapters}
-              onPlan={(edit) => update({ edit })}
-              onThumbnail={(thumbnailAt) => update({ thumbnailAt })}
-              dirty={dirty}
-              hidden={hidden}
-              language={language}
-              t={t}
-            />
-          )}
-
-          <ActionForm action={savePieceAction} id={formId} className="flex flex-wrap items-center gap-3">
-            {hidden}
-            {content.edit && <input type="hidden" name="edit" value={JSON.stringify(content.edit)} />}
-            {content.thumbnailAt !== undefined && <input type="hidden" name="thumbnailAt" value={content.thumbnailAt} />}
-            <SubmitButton pendingLabel={t.saving} disabled={!dirty}>
-              {t.saveEdits}
-            </SubmitButton>
-            {dirty && (
-              <span role="status" className="text-sm font-medium text-amber-deep">
-                {t.unsaved}
-              </span>
-            )}
-          </ActionForm>
-
-          <ReadyCheckPanel platform={platform} content={content} sources={sources} recent={recent} language={language} t={t} />
-          {placeholder && !dirty && <Notice>{t.placeholderWarning}</Notice>}
-          {problem && <Notice>{problem}</Notice>}
-
-          {content.edit && clip?.status === "ready" && (
-            <MakeVideo video={video} dirty={dirty} hidden={hidden} language={language} t={t} />
-          )}
-
-          <VideoManualPost
+        {clipReady && (
+          <EditSection
             platform={platform}
-            src={src}
-            content={content}
-            chapters={chapters}
+            plan={content.edit}
+            phrases={phrases}
+            silences={silences}
+            duration={clip.duration ?? 0}
+            clipId={clip.id}
+            onPlan={(edit) => update({ edit })}
+            dirty={dirty}
             hidden={hidden}
-            blocked={dirty || placeholder || problem !== null || !videoReady}
-            videoReady={videoReady}
             language={language}
             t={t}
           />
+        )}
 
-          <PieceTools piece={piece} hidden={hidden} dirty={dirty} t={t} />
-        </div>
-      )}
+        {clipReady && content.edit && (
+          <details className="rounded-lg border border-mist p-3" data-plan>
+            <summary className="cursor-pointer text-sm font-semibold">{s.fineTune}</summary>
+            <div className="mt-4">
+              <FineTune
+                platform={platform}
+                plan={content.edit}
+                phrases={phrases}
+                silences={silences}
+                duration={clip.duration ?? 0}
+                clipId={clip.id}
+                sourceRef={sourceRef}
+                thumbnailAt={content.thumbnailAt}
+                chapters={chapters}
+                onPlan={(edit) => update({ edit })}
+                onThumbnail={(thumbnailAt) => update({ thumbnailAt })}
+                t={t}
+              />
+            </div>
+          </details>
+        )}
+
+        {longClip && (
+          <details className="rounded-lg border border-mist p-3">
+            <summary className="cursor-pointer text-sm font-semibold">{s.otherNetworks}</summary>
+            <div className="mt-4">
+              <MomentsSection
+                platform={platform}
+                moments={content.moments ?? []}
+                phrases={phrases}
+                taken={taken}
+                dirty={dirty}
+                hidden={hidden}
+                language={language}
+                t={t}
+              />
+            </div>
+          </details>
+        )}
+      </Step>
+
+      {/* 3. Make the finished video. */}
+      <Step
+        number={3}
+        title={s.makeTitle}
+        hint={done.edit ? (videoReady ? undefined : s.makeHint) : s.makeLocked}
+        state={stateOf(3, done.make)}
+        language={language}
+        t={t}
+      >
+        {finished}
+        {piece.content.edit && clipReady && <MakeVideo video={video} dirty={dirty} hidden={hidden} language={language} t={t} />}
+      </Step>
+
+      {/* 4. The words that go with it, and posting. */}
+      <Step number={4} title={s.postTitle} state={stateOf(4, false)} language={language} t={t}>
+        <label className="block">
+          <span className="label mb-1 flex justify-between gap-2">
+            <span>{hasTitle ? t.videoTitle : t.videoCoverText}</span>
+            <span dir="ltr" className={(content.title?.length ?? 0) > VIDEO_TITLE_LIMIT ? "font-bold text-danger" : ""}>
+              {content.title?.length ?? 0} / {VIDEO_TITLE_LIMIT}
+            </span>
+          </span>
+          <input form={formId} name="videoTitle" value={content.title ?? ""} onChange={(event) => update({ title: event.target.value })} dir="auto" className="field" />
+        </label>
+        <label className="block">
+          <span className="label mb-1 flex justify-between gap-2">
+            <span>{hasTitle ? t.videoDescription : platform === "reel" ? t.caption : t.postBody}</span>
+            <span dir="ltr" className={content.body.length > BODY_LIMITS[platform] ? "font-bold text-danger" : ""}>
+              {content.body.length} / {BODY_LIMITS[platform]}
+            </span>
+          </span>
+          <textarea form={formId} name="body" rows={hasTitle ? 10 : 7} value={content.body} onChange={(event) => update({ body: event.target.value })} dir="auto" className="field" />
+        </label>
+        {sources.length > 0 && (
+          <SourcesBox platform={platform} body={content.body} sources={sources} contentLanguage={contentLanguage} onChange={(body) => update({ body })} t={t} />
+        )}
+        {hasTitle ? (
+          <label className="block">
+            <span className="label mb-1 block">{t.videoTags}</span>
+            <input
+              form={formId}
+              name="videoTags"
+              value={(content.tags ?? []).join(", ")}
+              onChange={(event) => update({ tags: event.target.value.split(/[,،]/).map((tag) => tag.trimStart()) })}
+              dir="auto"
+              className="field"
+            />
+          </label>
+        ) : (
+          <input type="hidden" form={formId} name="videoTags" value="" />
+        )}
+
+        <ReadyCheckPanel platform={platform} content={content} sources={sources} recent={recent} language={language} t={t} />
+        {placeholder && !dirty && <Notice>{t.placeholderWarning}</Notice>}
+        {problem && <Notice>{problem}</Notice>}
+
+        <VideoManualPost
+          platform={platform}
+          src={src}
+          content={content}
+          chapters={chapters}
+          hidden={hidden}
+          blocked={dirty || placeholder || problem !== null || !videoReady}
+          videoReady={videoReady}
+          language={language}
+          t={t}
+        />
+
+        <details>
+          <summary className="cursor-pointer text-sm font-medium text-cobalt">{s.more}</summary>
+          <div className="mt-3 space-y-4">
+            <PieceTools piece={piece} hidden={hidden} dirty={dirty} t={t} />
+          </div>
+        </details>
+      </Step>
+
+      {/* One save for everything above; it only shows while there's something to save. */}
+      <ActionForm
+        action={savePieceAction}
+        id={formId}
+        className={dirty ? "sticky bottom-4 z-10 flex flex-wrap items-center gap-3 rounded-xl border border-cobalt bg-deep p-3 shadow-lg" : "hidden"}
+      >
+        {hidden}
+        {content.edit && <input type="hidden" name="edit" value={JSON.stringify(content.edit)} />}
+        {content.thumbnailAt !== undefined && <input type="hidden" name="thumbnailAt" value={content.thumbnailAt} />}
+        <SubmitButton pendingLabel={t.saving} className="btn-primary" disabled={!dirty}>
+          {t.saveEdits}
+        </SubmitButton>
+        <span role="status" className="text-sm font-medium text-amber-deep">
+          {s.unsaved}
+        </span>
+      </ActionForm>
     </article>
+  );
+}
+
+function PostPreview({ content }: { content: PieceContent }) {
+  return (
+    <div className="h-fit rounded-lg border border-[#d9d4cc] bg-white p-3 text-sm text-[#1e1e1e]">
+      {content.title && <p className="font-semibold">{content.title}</p>}
+      <p className="mt-1 whitespace-pre-wrap break-words leading-relaxed">{content.body}</p>
+    </div>
   );
 }
 
@@ -335,8 +486,7 @@ function ScriptEditor({ formId, script, onChange, t }: { formId: string; script:
     onChange(script.map((part, at) => (at === index ? { ...part, ...fields } : part)));
   return (
     <fieldset className="space-y-3">
-      <legend className="label">{t.scriptTitle}</legend>
-      <p className="text-sm text-ink-soft">{t.scriptIntro}</p>
+      <legend className="sr-only">{t.scriptTitle}</legend>
       {script.map((part, index) => (
         <div key={index} className="space-y-2 rounded-lg border border-mist p-3" data-script-part={index + 1}>
           <div className="flex items-center justify-between gap-2">
@@ -419,15 +569,51 @@ function ClipSection({
         }[clip.stage ?? "reading"] ?? t.clipReading
       : null;
 
+  const picker = (
+    <input
+      type="file"
+      accept="video/*,.mp4,.mov,.m4v,.webm,.mkv"
+      className="sr-only"
+      disabled={dirty}
+      name="clip"
+      onChange={(event) => {
+        const file = event.target.files?.[0];
+        event.target.value = "";
+        if (file) send(file);
+      }}
+    />
+  );
+
   return (
-    <section className="space-y-3 rounded-lg border border-mist p-4" aria-label={t.clipTitle} data-clip>
-      <h3 className="font-display text-lg font-semibold">{t.clipTitle}</h3>
-      {!clip && <p className="text-sm text-ink-soft">{t.clipIntro}</p>}
-      {clip && (
-        <p className="text-sm">
-          <bdi className="font-medium">{clip.originalName}</bdi>
-          {clip.duration ? <span className="text-ink-soft" dir="ltr"> · {formatTime(clip.duration)}</span> : null}
-        </p>
+    <div className="space-y-3" aria-label={t.clipTitle} data-clip>
+      {upload ? (
+        <div role="status" className="space-y-1 text-sm font-medium">
+          <p>{t.uploadingClip.replace("{percent}", percent(upload.progress, language))}</p>
+          <div className="h-2 overflow-hidden rounded bg-mist">
+            <div className="h-full bg-cobalt" style={{ width: `${Math.round(upload.progress * 100)}%` }} />
+          </div>
+        </div>
+      ) : clip ? (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-canvas p-3 text-sm">
+          <p>
+            <bdi className="font-medium">{clip.originalName}</bdi>
+            {clip.duration ? <span className="text-ink-soft" dir="ltr"> · {formatTime(clip.duration)}</span> : null}
+          </p>
+          <label className={`text-sm font-medium text-cobalt ${dirty ? "pointer-events-none opacity-50" : "cursor-pointer hover:underline"}`}>
+            {t.replaceClip}
+            {picker}
+          </label>
+        </div>
+      ) : (
+        <label
+          className={`flex flex-col items-center gap-1 rounded-xl border-2 border-dashed border-cobalt/60 p-6 text-center ${
+            dirty ? "pointer-events-none opacity-50" : "cursor-pointer hover:bg-cobalt/10"
+          }`}
+        >
+          <span className="btn btn-primary pointer-events-none">{t.chooseClip}</span>
+          <span className="mt-2 text-sm text-ink-soft">{t.videoSteps.uploadHint}</span>
+          {picker}
+        </label>
       )}
       {stage && (
         <p role="status" className="pending-pulse text-sm font-medium text-cobalt">
@@ -444,31 +630,6 @@ function ClipSection({
           </ActionForm>
         </div>
       )}
-
-      {upload ? (
-        <div role="status" className="space-y-1 text-sm font-medium">
-          <p>{t.uploadingClip.replace("{percent}", percent(upload.progress, language))}</p>
-          <div className="h-2 overflow-hidden rounded bg-mist">
-            <div className="h-full bg-navy" style={{ width: `${Math.round(upload.progress * 100)}%` }} />
-          </div>
-        </div>
-      ) : (
-        <label className={`btn btn-quiet w-fit ${dirty ? "pointer-events-none opacity-50" : "cursor-pointer"}`}>
-          {clip ? t.replaceClip : t.chooseClip}
-          <input
-            type="file"
-            accept="video/*,.mp4,.mov,.m4v,.webm,.mkv"
-            className="sr-only"
-            disabled={dirty}
-            name="clip"
-            onChange={(event) => {
-              const file = event.target.files?.[0];
-              event.target.value = "";
-              if (file) send(file);
-            }}
-          />
-        </label>
-      )}
       {dirty && <p className="text-sm text-ink-soft">{t.clipNeedsSave}</p>}
       {error && (
         <p role="alert" className="text-sm font-medium text-danger">
@@ -477,78 +638,120 @@ function ClipSection({
       )}
 
       {video.otherClips.length > 0 && !upload && (
-        <div className="space-y-2 text-sm">
-          <p className="text-ink-soft">{t.useOtherClip}</p>
-          {video.otherClips.map((other) => (
-            <ActionForm key={other.id} action={useFootageAction} className="flex flex-wrap items-center gap-2">
-              {hidden}
-              <input type="hidden" name="footageId" value={other.id} />
-              <bdi>{other.originalName}</bdi>
-              {other.duration ? <span dir="ltr" className="text-ink-soft">{formatTime(other.duration)}</span> : null}
-              <SubmitButton pendingLabel={t.usingClip} disabled={dirty}>
-                {t.useClip}
-              </SubmitButton>
-            </ActionForm>
-          ))}
-        </div>
+        <details className="text-sm">
+          <summary className="cursor-pointer font-medium text-cobalt">{t.videoSteps.otherClips}</summary>
+          <div className="mt-2 space-y-2">
+            {video.otherClips.map((other) => (
+              <ActionForm key={other.id} action={useFootageAction} className="flex flex-wrap items-center gap-2">
+                {hidden}
+                <input type="hidden" name="footageId" value={other.id} />
+                <bdi>{other.originalName}</bdi>
+                {other.duration ? <span dir="ltr" className="text-ink-soft">{formatTime(other.duration)}</span> : null}
+                <SubmitButton pendingLabel={t.usingClip} disabled={dirty}>
+                  {t.useClip}
+                </SubmitButton>
+              </ActionForm>
+            ))}
+          </div>
+        </details>
       )}
-    </section>
+    </div>
   );
 }
 
-/** The edit plan: what's cut, zoomed and labelled, phrase by phrase, with the original clip to check against. */
-function PlanSection({
-  piece,
+/** A long take for a short network: keep only its best parts, in this same post. */
+function KeepBest({
   platform,
-  plan,
-  phrases,
   duration,
-  clipId,
-  sourceRef,
-  formId,
-  thumbnailAt,
-  chapters,
-  onPlan,
-  onThumbnail,
   dirty,
   hidden,
   language,
   t,
 }: {
-  piece: EditorPiece;
   platform: VideoPlatform;
-  plan: EditPlan | undefined;
-  phrases: Phrase[];
   duration: number;
-  clipId: string;
-  sourceRef: React.RefObject<HTMLVideoElement | null>;
-  formId: string;
-  thumbnailAt: number | undefined;
-  chapters: string[];
-  onPlan: (plan: EditPlan) => void;
-  onThumbnail: (seconds: number) => void;
   dirty: boolean;
   hidden: React.ReactNode;
   language: Language;
   t: Strings;
 }) {
+  const s = t.videoSteps;
+  const max = Math.min(VIDEO_FORMATS[platform].maxSeconds, Math.floor(duration));
+  return (
+    <ActionForm action={makeHighlightsAction} className="space-y-3 rounded-lg bg-canvas p-3" data-highlights>
+      {hidden}
+      <input type="hidden" name="ui" value={language} />
+      <input type="hidden" name="platform" value={platform} />
+      <div>
+        <p className="font-semibold">{s.long.replace("{length}", formatTime(duration))}</p>
+        <p className="text-sm text-ink-soft">{s.longHint}</p>
+      </div>
+      <div className="flex flex-wrap items-end gap-3">
+        <label className="block text-sm">
+          <span className="label mb-1 block">{s.seconds}</span>
+          <input
+            name="seconds"
+            type="number"
+            min={HIGHLIGHT_SECONDS.min}
+            max={max}
+            step={5}
+            defaultValue={Math.min(60, max)}
+            dir="ltr"
+            className="field w-28"
+          />
+        </label>
+        <SubmitButton pendingLabel={s.keepingBest} disabled={dirty}>
+          {s.keepBest}
+        </SubmitButton>
+      </div>
+    </ActionForm>
+  );
+}
+
+/** The edit, simply: one button to plan it, then the few switches that matter. */
+function EditSection({
+  platform,
+  plan,
+  phrases,
+  silences,
+  duration,
+  clipId,
+  onPlan,
+  dirty,
+  hidden,
+  language,
+  t,
+}: {
+  platform: VideoPlatform;
+  plan: EditPlan | undefined;
+  phrases: Phrase[];
+  silences: Silence[];
+  duration: number;
+  clipId: string;
+  onPlan: (plan: EditPlan) => void;
+  dirty: boolean;
+  hidden: React.ReactNode;
+  language: Language;
+  t: Strings;
+}) {
+  const s = t.videoSteps;
   const aiFormId = `plan-ai-${clipId}`;
-  const planButtons = (
-    <div className="space-y-2">
+  const ask = (
+    <div className="space-y-3">
       <label className="block space-y-1">
-        <span className="text-sm font-medium">{t.planRequest}</span>
-        <textarea form={aiFormId} name="request" rows={2} maxLength={2000} placeholder={t.planRequestHint} dir="auto" className="field" />
+        <span className="text-sm font-medium">{s.request}</span>
+        <textarea form={aiFormId} name="request" rows={2} maxLength={2000} placeholder={s.requestHint} dir="auto" className="field" />
       </label>
-      <label className="flex items-start gap-2 text-sm">
-        <input form={aiFormId} type="checkbox" name="explainers" defaultChecked={Boolean(plan?.explainers?.length)} className="mt-0.5 size-4 accent-cobalt" />
-        {t.planExplainers}
+      <label className="flex items-center gap-2 text-sm">
+        <input form={aiFormId} type="checkbox" name="explainers" defaultChecked={Boolean(plan?.explainers?.length)} className="size-4 accent-cobalt" />
+        {s.explainers}
       </label>
       <div className="flex flex-wrap items-center gap-2">
         <ActionForm action={planEditAction} id={aiFormId}>
           {hidden}
           <input type="hidden" name="mode" value="ai" />
           <SubmitButton pendingLabel={t.planningAi} className={plan ? "btn-quiet" : "btn-primary"} disabled={dirty}>
-            {plan ? t.planAgain : t.planWithAi}
+            {plan ? t.planAgain : s.editNow}
           </SubmitButton>
         </ActionForm>
         {!plan && (
@@ -556,7 +759,7 @@ function PlanSection({
             {hidden}
             <input type="hidden" name="mode" value="simple" />
             <SubmitButton pendingLabel={t.planningSimple} disabled={dirty}>
-              {t.planSimple}
+              {s.captionsOnly}
             </SubmitButton>
           </ActionForm>
         )}
@@ -564,23 +767,76 @@ function PlanSection({
     </div>
   );
 
-  if (!plan) {
-    return (
-      <section className="space-y-3 rounded-lg border border-mist p-4" aria-label={t.planTitle}>
-        <h3 className="font-display text-lg font-semibold">{t.planTitle}</h3>
-        <p className="text-sm text-ink-soft">{t.planIntro}</p>
-        {planButtons}
-        <p className="text-sm text-ink-soft">{t.planCost}</p>
-      </section>
-    );
-  }
+  if (!plan) return ask;
 
+  const set = (fields: Partial<EditPlan>) => onPlan({ ...plan, ...fields });
+  const total = outputDuration(keepRanges(phrases, plan, duration, silences));
+  const limit = VIDEO_FORMATS[platform].maxSeconds;
+  const network = platformLabel(platform, language);
+  return (
+    <div className="space-y-4">
+      <div className="space-y-1">
+        <p role="status" className={`font-semibold ${total > limit ? "text-danger" : ""}`} data-length>
+          {s.length.replace("{time}", formatTime(total))}{" "}
+          <span className="font-normal text-ink-soft">{s.limit.replace("{platform}", network).replace("{limit}", formatTime(limit))}</span>
+        </p>
+        {total > limit && <p className="text-sm font-medium text-danger">{s.tooLong.replace("{platform}", network)}</p>}
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <Toggle checked={plan.tightenPauses} onChange={(tightenPauses) => set({ tightenPauses })}>
+          {s.silences}
+        </Toggle>
+        <Toggle checked={plan.captions} onChange={(captions) => set({ captions })}>
+          {s.captions}
+        </Toggle>
+        <Toggle checked={plan.endCard} onChange={(endCard) => set({ endCard })}>
+          {s.endCard}
+        </Toggle>
+      </div>
+      <label className="block">
+        <span className="label mb-1 block">{s.titleCard}</span>
+        <input value={plan.titleCard} maxLength={80} onChange={(event) => set({ titleCard: event.target.value })} dir="auto" className="field" />
+      </label>
+      <details>
+        <summary className="cursor-pointer text-sm font-medium text-cobalt">{s.askAgain}</summary>
+        <div className="mt-3">{ask}</div>
+      </details>
+    </div>
+  );
+}
+
+/** Everything else about the edit, phrase by phrase, with the original clip to check against. */
+function FineTune({
+  platform,
+  plan,
+  phrases,
+  silences,
+  duration,
+  clipId,
+  sourceRef,
+  thumbnailAt,
+  chapters,
+  onPlan,
+  onThumbnail,
+  t,
+}: {
+  platform: VideoPlatform;
+  plan: EditPlan;
+  phrases: Phrase[];
+  silences: Silence[];
+  duration: number;
+  clipId: string;
+  sourceRef: React.RefObject<HTMLVideoElement | null>;
+  thumbnailAt: number | undefined;
+  chapters: string[];
+  onPlan: (plan: EditPlan) => void;
+  onThumbnail: (seconds: number) => void;
+  t: Strings;
+}) {
   const set = (fields: Partial<EditPlan>) => onPlan({ ...plan, ...fields });
   const cut = new Set(plan.cut);
   const zooms = new Set(plan.zooms);
-  const ranges = keepRanges(phrases, plan, duration);
-  const total = outputDuration(ranges);
-  const limit = VIDEO_FORMATS[platform].maxSeconds;
+  const total = outputDuration(keepRanges(phrases, plan, duration, silences));
   const toggle = (list: number[], index: number, on: boolean) => (on ? [...list, index] : list.filter((item) => item !== index));
   const upsert = <T extends { phrase: number }>(list: T[], index: number, item: T | null) =>
     [...list.filter((entry) => entry.phrase !== index), ...(item ? [item] : [])].sort((a, b) => a.phrase - b.phrase);
@@ -592,49 +848,45 @@ function PlanSection({
   };
 
   return (
-    <section className="space-y-4 rounded-lg border border-mist p-4" aria-label={t.planTitle} data-plan>
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h3 className="font-display text-lg font-semibold">{t.planTitle}</h3>
-        <span className={`rounded-full px-3 py-0.5 text-sm font-semibold ${plan.level === "full" ? "bg-amber text-canvas" : "bg-mist"}`} data-level={plan.level}>
-          {plan.level === "full" ? t.levelFull : t.levelLight}
-        </span>
-      </div>
-      {plan.reason && <p className="text-sm">{plan.reason}</p>}
-      {planButtons}
-
+    <div className="space-y-4">
+      {plan.reason && <p className="text-sm text-ink-soft">{plan.reason}</p>}
       <div className="grid gap-3 sm:grid-cols-2">
-        <label className="flex items-center gap-2 text-sm font-medium">
-          <input type="checkbox" checked={plan.captions} onChange={(event) => set({ captions: event.target.checked })} className="size-4 accent-cobalt" />
-          {t.planCaptions}
+        <label className="block">
+          <span className="label mb-1 block">{t.videoSteps.framing}</span>
+          <select
+            value={plan.framing}
+            onChange={(event) => set({ framing: event.target.value === "fit" ? "fit" : "fill" })}
+            dir="auto"
+            className="field !py-1.5 text-sm"
+          >
+            <option value="fill">{t.framingFill}</option>
+            <option value="fit">{t.framingFit}</option>
+          </select>
         </label>
-        <label className="flex items-center gap-2 text-sm font-medium">
-          <input type="checkbox" checked={plan.tightenPauses} onChange={(event) => set({ tightenPauses: event.target.checked })} className="size-4 accent-cobalt" />
-          {t.planTighten}
-        </label>
-        <label className="flex items-center gap-2 text-sm font-medium">
-          <input type="checkbox" checked={plan.endCard} onChange={(event) => set({ endCard: event.target.checked })} className="size-4 accent-cobalt" />
-          {t.planEndCard}
-        </label>
-        <select
-          value={plan.framing}
-          onChange={(event) => set({ framing: event.target.value === "fit" ? "fit" : "fill" })}
-          dir="auto" className="field !py-1.5 text-sm"
-          aria-label={t.framingFill}
-        >
-          <option value="fill">{t.framingFill}</option>
-          <option value="fit">{t.framingFit}</option>
-        </select>
+        {THUMBNAIL_PLATFORMS.includes(platform) && (
+          <label className="block">
+            <span className="label mb-1 block">{t.thumbnailAt}</span>
+            <input
+              type="number"
+              min={0}
+              max={Math.floor(total)}
+              step={0.5}
+              dir="ltr"
+              value={thumbnailAt ?? ""}
+              placeholder={String(Math.min(2, Math.round(total / 3)))}
+              onChange={(event) => event.target.value !== "" && onThumbnail(Number(event.target.value))}
+              className="field"
+            />
+          </label>
+        )}
       </div>
-      <label className="block">
-        <span className="label mb-1 block">{t.planTitleCard}</span>
-        <input value={plan.titleCard} maxLength={80} onChange={(event) => set({ titleCard: event.target.value })} dir="auto" className="field" />
-      </label>
       <label className="block">
         <span className="label mb-1 block">{t.planHighlights}</span>
         <input
           value={plan.highlights.join(", ")}
           onChange={(event) => set({ highlights: event.target.value.split(/[,،]/).map((word) => word.trimStart()) })}
-          dir="auto" className="field"
+          dir="auto"
+          className="field"
         />
       </label>
       {(plan.explainers?.length ?? 0) > 0 && (
@@ -643,7 +895,8 @@ function PlanSection({
           <select
             value={plan.explainerStyle ?? "tech"}
             onChange={(event) => set({ explainerStyle: event.target.value as ExplainerStyle })}
-            dir="auto" className="field !py-1.5 text-sm"
+            dir="auto"
+            className="field !py-1.5 text-sm"
           >
             {EXPLAINER_STYLES.map((style) => (
               <option key={style} value={style}>
@@ -654,27 +907,6 @@ function PlanSection({
           <span className="mt-1 block text-xs text-ink-soft">{t.explainersHint}</span>
         </label>
       )}
-      {THUMBNAIL_PLATFORMS.includes(platform) && (
-        <label className="block max-w-56">
-          <span className="label mb-1 block">{t.thumbnailAt}</span>
-          <input
-            type="number"
-            min={0}
-            max={Math.floor(total)}
-            step={0.5}
-            dir="ltr"
-            value={thumbnailAt ?? ""}
-            placeholder={String(Math.min(2, Math.round(total / 3)))}
-            onChange={(event) => event.target.value !== "" && onThumbnail(Number(event.target.value))}
-            className="field"
-          />
-        </label>
-      )}
-
-      <p role="status" className={`text-sm font-semibold ${total > limit ? "text-danger" : ""}`} data-length>
-        {t.finishedLength.replace("{time}", formatTime(total)).replace("{limit}", formatTime(limit))}
-        {total > limit && <span className="block">{t.tooLong}</span>}
-      </p>
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
         <div className="lg:sticky lg:top-4 lg:self-start">
@@ -725,7 +957,8 @@ function PlanSection({
                         fixes: upsert(plan.fixes, index, event.target.value === phrase.text ? null : { phrase: index, text: event.target.value }),
                       })
                     }
-                    dir="auto" className="field !py-1.5 text-sm"
+                    dir="auto"
+                    className="field !py-1.5 text-sm"
                     data-caption
                   />
                   {kept && (
@@ -738,7 +971,8 @@ function PlanSection({
                         onChange={(event) =>
                           set({ callouts: upsert(plan.callouts, index, event.target.value ? { phrase: index, text: event.target.value } : null) })
                         }
-                        dir="auto" className="field !py-1.5 text-sm"
+                        dir="auto"
+                        className="field !py-1.5 text-sm"
                       />
                       {platform === "youtube" && (
                         <input
@@ -749,7 +983,8 @@ function PlanSection({
                           onChange={(event) =>
                             set({ chapters: upsert(plan.chapters, index, event.target.value ? { phrase: index, title: event.target.value } : null) })
                           }
-                          dir="auto" className="field !py-1.5 text-sm"
+                          dir="auto"
+                          className="field !py-1.5 text-sm"
                         />
                       )}
                     </div>
@@ -781,7 +1016,7 @@ function PlanSection({
           )}
         </div>
       )}
-    </section>
+    </div>
   );
 }
 
@@ -914,11 +1149,8 @@ function MomentsSection({
   const m = t.moments;
   const targets = SHORT_PLATFORMS.filter((target) => target !== platform);
   return (
-    <section aria-label={m.title} className="space-y-3 rounded-lg border border-mist bg-canvas p-4" data-moments>
-      <div>
-        <h3 className="font-display text-lg font-semibold">{m.title}</h3>
-        <p className="mt-1 text-sm text-ink-soft">{m.hint}</p>
-      </div>
+    <section aria-label={m.title} className="space-y-3" data-moments>
+      <p className="text-sm text-ink-soft">{m.hint}</p>
       {moments.length > 0 && (
         <ol className="space-y-3">
           {moments.map((moment, index) => {
@@ -977,7 +1209,7 @@ function MomentsSection({
           {moments.length ? m.again : m.find}
         </SubmitButton>
       </ActionForm>
-      <div className="border-t border-mist pt-3" data-highlights>
+      <div className="border-t border-mist pt-3" data-highlights-other>
       <ActionForm action={makeHighlightsAction} className="space-y-2">
         {hidden}
         <input type="hidden" name="ui" value={language} />

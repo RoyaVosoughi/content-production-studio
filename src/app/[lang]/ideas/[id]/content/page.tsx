@@ -92,6 +92,7 @@ export default async function ContentPage({ params }: { params: Promise<{ lang: 
               duration: state.clip.duration,
               originalName: state.clip.originalName,
               phrases: state.clip.phrases,
+              silences: state.clip.silences ?? [],
             },
             otherClips: state.otherClips.map(({ id, originalName, duration }) => ({ id, originalName, duration })),
             render: state.render && {

@@ -32,6 +32,8 @@ import {
   captionFile,
   chapterLines,
   cleanPlan,
+  fitPhrasesToAudio,
+  fitWordsToAudio,
   keepRanges,
   outputDuration,
   simplePlan,
@@ -95,6 +97,32 @@ describe("editing logic", () => {
     expect(keepRanges(phrases, plan({ cut: [0, 1, 2] }), 12)).toHaveLength(1);
     const ranges = keepRanges(phrases, plan({ cut: [0, 1, 2], tightenPauses: true }), 12);
     expect(ranges).toHaveLength(2);
+  });
+
+  it("fits words to the pauses the audio really has", () => {
+    // Whisper says "So" lasted five seconds; the audio was silent for most of it.
+    const stretched = [word("Agents", 0.2, 0.7), word("So", 1.0, 6.2), word("here.", 6.2, 6.6)];
+    const fitted = fitWordsToAudio(stretched, [{ start: 0.8, end: 5.8 }]);
+    expect(fitted[1]).toMatchObject({ start: 5.8, end: 6.2 });
+    expect(fitted[0]).toEqual(stretched[0]);
+    // A word wholly inside a pause is left as it was, and phrases keep their numbers.
+    expect(fitWordsToAudio([word("hm", 2, 2.5)], [{ start: 1, end: 3 }])[0]).toMatchObject({ start: 2, end: 2.5 });
+    const refitted = fitPhrasesToAudio(phrases, [{ start: 8.6, end: 9.75 }]);
+    expect(refitted).toHaveLength(phrases.length);
+    expect(refitted[3].end).toBeCloseTo(8.6);
+  });
+
+  it("takes out the pauses the audio has even where the word times are wrong", () => {
+    // Whole words placed inside a four-second silence: the word times alone see no pause.
+    const misplaced = buildPhrases([word("One", 0, 0.5), word("two", 0.5, 2.5), word("three", 2.5, 4.5), word("four.", 4.5, 5)]);
+    const silences = [{ start: 0.6, end: 4.6 }];
+    const tight = keepRanges(misplaced, plan({ tightenPauses: true }), 6, silences);
+    expect(outputDuration(tight)).toBeLessThan(1.6);
+    // Each cut leaves a breath of quiet on both sides.
+    expect(tight[0].end).toBeCloseTo(0.75);
+    expect(tight[1].start).toBeCloseTo(4.45);
+    // Only when asked.
+    expect(outputDuration(keepRanges(misplaced, plan(), 6, silences))).toBeGreaterThan(5);
   });
 
   it("captions only kept speech, in short lines, with corrections", () => {

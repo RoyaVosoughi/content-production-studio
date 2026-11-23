@@ -4,7 +4,7 @@ import { studioDb } from "./fixtures/brand";
 import { passingTeam } from "./fakes";
 import type { Db } from "@/lib/db/client";
 import { footage, pieces, publications, type Moment, type Phrase } from "@/lib/db/schema";
-import { createPieces, findClipMoments, getPieces, makeHighlights, makeShortFromMoment, planVideoEdit, useFootage, useWholeClip } from "@/lib/content";
+import { createPieces, findClipMoments, getPieces, makeHighlights, makeShortFromMoment, planVideoEdit, savePieceEdit, useFootage, useWholeClip } from "@/lib/content";
 import { StudioError } from "@/lib/errors";
 import { approveScenario, decideIdea, generateIdeas, getScenario, writeScenario, type StudioDeps } from "@/lib/studio";
 import { cleanMoments, outsideParts, outsideWindow, partsSeconds, pickHighlights, windowSeconds } from "@/lib/video/edit";
@@ -189,6 +189,14 @@ describe("one long video into short ones", () => {
     await useWholeClip(db, made.pieceId, 2);
     const whole = (await getPiecesFor(db, youtubeId)).find((piece) => piece.platform === "short")!;
     expect(whole.current.content.parts).toBeUndefined();
+
+    // A long take in a Short can keep only its best parts in that same Short, with its own words.
+    await savePieceEdit(db, whole.id, whole.currentVersion, { ...whole.current.content, title: "My title", body: "My caption" });
+    const own = (await getPiecesFor(db, youtubeId)).find((piece) => piece.platform === "short")!;
+    await makeHighlights(deps, own.id, own.currentVersion, "short", 60);
+    const shortened = (await getPiecesFor(db, youtubeId)).find((piece) => piece.platform === "short")!;
+    expect(shortened.current.content).toMatchObject({ title: "My title", body: "My caption", parts: [{ from: 5, to: 9 }, { from: 15, to: 19 }] });
+    expect(shortened.current.content.edit?.tightenPauses).toBe(true);
   });
 
   it("adds a new version to a video that already exists, but never changes a posted one", async () => {

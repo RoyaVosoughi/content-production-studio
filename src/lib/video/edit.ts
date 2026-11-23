@@ -44,8 +44,84 @@ export function buildPhrases(words: Word[]): Phrase[] {
   return phrases;
 }
 
+/** A pause the audio really has, as FFmpeg hears it. */
+export type Silence = { start: number; end: number };
+/** Pauses at least this long are taken out of the words Whisper laid over them. */
+const FIT_PAUSE = 0.3;
+
+/**
+ * Whisper's word times often run over the pauses around a word: one word can seem to last seven
+ * seconds when most of it is silence. This trims each word to the speech the audio really has, so
+ * shortening pauses, captions and the finished length all see the real pauses. A word that falls
+ * wholly inside a pause is quiet speech the pause detection missed, and stays as it was.
+ */
+export function fitWordsToAudio(words: Word[], silences: Silence[]): Word[] {
+  const pauses = silences.filter((pause) => pause.end - pause.start >= FIT_PAUSE).sort((a, b) => a.start - b.start);
+  return words.map((word) => {
+    let { start, end } = word;
+    for (const pause of pauses) {
+      if (pause.end <= start || pause.start >= end) continue;
+      if (pause.start <= start && pause.end >= end) return word;
+      if (pause.start <= start) start = pause.end;
+      else if (pause.end >= end) end = pause.start;
+      // A pause inside the word: the word is on the longer side of it.
+      else if (pause.start - start >= end - pause.end) end = pause.start;
+      else start = pause.end;
+    }
+    return end > start ? { ...word, start, end } : word;
+  });
+}
+
+/** The same phrases with their words fitted to the audio, so plans made on them still point at the right phrases. */
+export function fitPhrasesToAudio(phrases: Phrase[], silences: Silence[]): Phrase[] {
+  return phrases.map((phrase) => {
+    const words = fitWordsToAudio(phrase.words, silences);
+    if (words.length === 0) return phrase;
+    return { ...phrase, start: words[0].start, end: Math.max(...words.map((word) => word.end)), words };
+  });
+}
+
 /** The parts of the clip the finished video keeps, in order and without overlaps. */
-export function keepRanges(phrases: Phrase[], plan: Pick<EditPlan, "cut" | "tightenPauses">, duration: number): Range[] {
+export function keepRanges(
+  phrases: Phrase[],
+  plan: Pick<EditPlan, "cut" | "tightenPauses">,
+  duration: number,
+  silences: Silence[] = [],
+): Range[] {
+  const kept = speechRanges(phrases, plan, duration);
+  return plan.tightenPauses && silences.length > 0 ? withoutPauses(kept, silences) : kept;
+}
+
+/** Audio pauses at least this long are shortened when tightenPauses is on... */
+const CUT_PAUSE = 0.6;
+/** ...to this much quiet on each side, so the cut sounds like a breath, not a jump. */
+const PAUSE_ROOM = 0.15;
+/** A sliver left between two cuts is too short to hear as speech. */
+const SLIVER = 0.12;
+
+/**
+ * Takes the pauses the audio really has out of the kept parts. Word times can't be trusted for
+ * this on their own: Whisper sometimes puts whole words inside a silence.
+ */
+function withoutPauses(ranges: Range[], silences: Silence[]): Range[] {
+  const gaps = silences
+    .filter((pause) => pause.end - pause.start >= CUT_PAUSE)
+    .map((pause) => ({ start: pause.start + PAUSE_ROOM, end: pause.end - PAUSE_ROOM }))
+    .sort((a, b) => a.start - b.start);
+  const result: Range[] = [];
+  for (const range of ranges) {
+    let start = range.start;
+    for (const gap of gaps) {
+      if (gap.end <= start || gap.start >= range.end) continue;
+      if (gap.start > start) result.push({ start, end: gap.start });
+      start = Math.max(start, gap.end);
+    }
+    if (range.end > start) result.push({ start, end: range.end });
+  }
+  return result.filter((range) => range.end - range.start >= SLIVER);
+}
+
+function speechRanges(phrases: Phrase[], plan: Pick<EditPlan, "cut" | "tightenPauses">, duration: number): Range[] {
   const cut = new Set(plan.cut);
   const ranges: Range[] = [];
   for (const [index, phrase] of phrases.entries()) {
@@ -120,8 +196,8 @@ export function formatTime(seconds: number): string {
  * YouTube chapters as they go in the description. YouTube needs the first at 0:00, at least three,
  * and each at least 10 seconds long, so chapters that break those rules are left out.
  */
-export function chapterLines(phrases: Phrase[], plan: EditPlan, duration: number): string[] {
-  const ranges = keepRanges(phrases, plan, duration);
+export function chapterLines(phrases: Phrase[], plan: EditPlan, duration: number, silences: Silence[] = []): string[] {
+  const ranges = keepRanges(phrases, plan, duration, silences);
   const total = outputDuration(ranges);
   const points = plan.chapters
     .map((chapter) => {
@@ -302,8 +378,14 @@ function shape(platform: VideoPlatform) {
 }
 
 /** Splits the kept speech into short caption lines, timed to the finished video. */
-export function captionChunks(phrases: Phrase[], plan: EditPlan, duration: number, platform: VideoPlatform): CaptionChunk[] {
-  const ranges = keepRanges(phrases, plan, duration);
+export function captionChunks(
+  phrases: Phrase[],
+  plan: EditPlan,
+  duration: number,
+  platform: VideoPlatform,
+  silences: Silence[] = [],
+): CaptionChunk[] {
+  const ranges = keepRanges(phrases, plan, duration, silences);
   const limit = CHUNK[shape(platform)];
   const fixes = new Map(plan.fixes.map((fix) => [fix.phrase, fix.text]));
   const cut = new Set(plan.cut);

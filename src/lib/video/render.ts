@@ -18,6 +18,7 @@ import {
   keepRanges,
   outputDuration,
   phraseOutputStart,
+  type Silence,
   type ExplainerWindow,
   type Range,
 } from "./edit";
@@ -39,6 +40,8 @@ import { FFMPEG, filterPath, FONT_DIR, run, VIDEO_DIR } from "./tools";
 
 /** Change this when the editing changes, so videos made the old way are made again. */
 export const RENDER_VERSION = 2;
+/** Change this when shortening pauses changes: only videos that shorten them are made again. */
+const PAUSES_VERSION = 1;
 
 const TITLE_AT = 0.3;
 const TITLE_FOR = 3.2;
@@ -46,7 +49,16 @@ const CALLOUT_FOR = 2.4;
 const END_FOR = 3.5;
 const ZOOM = 0.1;
 
-export type Clip = { id: string; file: string; duration: number; width: number; height: number; phrases: Phrase[] };
+export type Clip = {
+  id: string;
+  file: string;
+  duration: number;
+  width: number;
+  height: number;
+  phrases: Phrase[];
+  /** The pauses heard in the audio, which "shorten long pauses" takes out. */
+  silences: Silence[];
+};
 export type Card = { kind: OverlayKind; text: string; start: number; duration: number };
 
 const PLAIN_BRAND: VideoBrand = { name: "", instagram: "", headline: "", colors: DEFAULT_COLORS, headingStyle: "serif" };
@@ -77,6 +89,8 @@ export function renderKey(
         title: content.title ?? "",
         thumbnailAt: content.thumbnailAt ?? null,
         brand,
+        // Shortened pauses now follow the audio itself, so videos that shortened them are made again.
+        ...(content.edit?.tightenPauses ? { PAUSES_VERSION } : {}),
         // Explainers are drawn like animations, so a new animation design makes these videos again.
         ...(content.edit?.explainers?.length ? { ANIMATION_VERSION } : {}),
       }),
@@ -290,7 +304,7 @@ export const chromeDraw: DrawCards = async (pages) => {
 export function renderProblem(platform: VideoPlatform, content: PieceContent, clip: Clip | null): string | null {
   if (!content.footage || !clip) return "Upload your clip first.";
   if (!content.edit) return "Plan the edit first.";
-  const total = outputDuration(keepRanges(clip.phrases, content.edit, clip.duration));
+  const total = outputDuration(keepRanges(clip.phrases, content.edit, clip.duration, clip.silences));
   if (total < 1) return "The edit removes almost everything. Keep more of the clip.";
   const max = VIDEO_FORMATS[platform].maxSeconds;
   if (total > max) return `The edited video is ${formatTime(total)} long. This network allows up to ${formatTime(max)}, so cut more.`;
@@ -317,7 +331,7 @@ export async function renderVideo(
   try {
     const source = footagePath(clip.file);
     if (!source) throw new Error(`Bad clip file name ${clip.file}`);
-    const ranges = keepRanges(clip.phrases, plan, clip.duration);
+    const ranges = keepRanges(clip.phrases, plan, clip.duration, clip.silences);
     const total = outputDuration(ranges);
     const { width, height } = VIDEO_FORMATS[platform];
 
@@ -332,7 +346,7 @@ export async function renderVideo(
     if (plan.captions) {
       await writeFile(
         /*turbopackIgnore: true*/ path.join(/*turbopackIgnore: true*/ work, "captions.ass"),
-        captionFile(captionChunks(clip.phrases, plan, clip.duration, platform), plan, platform, language, brand.colors.highlight),
+        captionFile(captionChunks(clip.phrases, plan, clip.duration, platform, clip.silences), plan, platform, language, brand.colors.highlight),
       );
     }
 
