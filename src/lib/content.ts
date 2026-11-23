@@ -913,6 +913,25 @@ export async function makeVideo(db: Db, pieceId: string, version: number, draw?:
   return startRender(db, { pieceId, platform: piece.platform, language: piece.language, content, clip: clip! }, draw);
 }
 
+/**
+ * Makes a video again that a restart cut off, if it is still the video for the post as it is now.
+ * Returns false, and forgets it, when the post was edited since: that video is no longer wanted.
+ */
+export async function resumeVideo(db: Db, key: string, draw?: DrawCards): Promise<boolean> {
+  const [render] = await db.select().from(videoRenders).where(eq(videoRenders.key, key));
+  if (!render) return false;
+  const piece = await requireVideoPiece(db, render.pieceId);
+  const { content } = await pieceVersion(db, piece.id, piece.currentVersion);
+  const clip = content.footage ? await readyClip(db, content.footage) : null;
+  const current = clip && !renderProblem(piece.platform, content, clip) ? renderKey(piece.platform, piece.language, clip.id, content, await brandForVideo(db, piece.language)) : null;
+  if (current !== key) {
+    await db.delete(videoRenders).where(and(eq(videoRenders.key, key), eq(videoRenders.status, "working")));
+    return false;
+  }
+  await makeVideo(db, piece.id, piece.currentVersion, draw);
+  return true;
+}
+
 export type VideoState = {
   clip: (typeof footage.$inferSelect & { stopped: boolean }) | null;
   /** This idea's other clips in the same language, to reuse one take for several videos. */

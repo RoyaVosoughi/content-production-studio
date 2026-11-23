@@ -1,8 +1,10 @@
-// Runs once when the studio starts: from then on it checks for scheduled posts whose time has come.
+// Runs once when the studio starts: from then on it checks for scheduled posts whose time has come,
+// and it picks up any work a restart cut off, such as reading a clip or making a video.
 export async function register() {
   if (process.env.NEXT_RUNTIME !== "nodejs") return;
   // Not while building, and not when turned off, as tests and test copies do.
   if (process.env.NEXT_PHASE === "phase-production-build" || process.env.STUDIO_SCHEDULER === "off") return;
-  const { startScheduler } = await import("./lib/schedule");
+  const [{ startScheduler }, { startResuming }] = await Promise.all([import("./lib/schedule"), import("./lib/resume")]);
   startScheduler();
+  startResuming();
 }

@@ -437,6 +437,16 @@ export const aiUsage = pgTable(
   (table) => [primaryKey({ columns: [table.day, table.model] })],
 );
 
+/**
+ * How many times in a row the studio has picked up a job that a restart cut off. A job that stops
+ * the studio every time it runs would otherwise be picked up forever. See lib/resume.ts.
+ */
+export const jobResumes = pgTable("job_resumes", {
+  key: text("key").primaryKey(),
+  count: integer("count").notNull().default(0),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 /** The one person the studio works for. See lib/profile.ts. */
 export const profiles = pgTable("profile", {
   id: integer("id").primaryKey(),
@@ -674,6 +684,11 @@ CREATE TABLE IF NOT EXISTS ai_usage (
   model text NOT NULL,
   requests integer NOT NULL DEFAULT 0,
   PRIMARY KEY (day, model)
+);
+CREATE TABLE IF NOT EXISTS job_resumes (
+  key text PRIMARY KEY,
+  count integer NOT NULL DEFAULT 0,
+  updated_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE TABLE IF NOT EXISTS profile (
   id integer PRIMARY KEY,

@@ -121,6 +121,39 @@ describe("falling back when a free allowance runs out", () => {
     await expect(routedJson("coach")("system", "prompt", schema)).rejects.toThrow(/free AI allowance is used up/);
   });
 
+  it("waits and tries the whole line once more when every model was busy or offline", async () => {
+    process.env.GEMINI_API_KEY = "g";
+    let calls = 0;
+    vi.stubGlobal("fetch", async () => {
+      calls++;
+      if (calls <= 2) throw new TypeError("fetch failed");
+      return geminiAnswer('{"ok":true}');
+    });
+    const routedJson = await routed();
+    await expect(routedJson("linkedin", 0)("system", "prompt", schema)).resolves.toEqual({ ok: true });
+    // Flash and Flash-Lite both missed, then Flash answered on the second round.
+    expect(calls).toBe(3);
+  });
+
+  it("gives up after the second round, and doesn't retry a used-up allowance", async () => {
+    process.env.GEMINI_API_KEY = "g";
+    let calls = 0;
+    vi.stubGlobal("fetch", async () => {
+      calls++;
+      return new Response("{}", { status: 503 });
+    });
+    const routedJson = await routed();
+    await expect(routedJson("coach", 0)("system", "prompt", schema)).rejects.toThrow(/busy/);
+    expect(calls).toBe(2);
+    calls = 0;
+    vi.stubGlobal("fetch", async () => {
+      calls++;
+      return new Response("{}", { status: 429 });
+    });
+    await expect(routedJson("coach", 0)("system", "prompt", schema)).rejects.toThrow(/free AI allowance is used up/);
+    expect(calls).toBe(1);
+  });
+
   it("asks for a key when none is set", async () => {
     const routedJson = await routed();
     await expect(routedJson("scout")("system", "prompt", schema)).rejects.toThrow(/GEMINI_API_KEY/);

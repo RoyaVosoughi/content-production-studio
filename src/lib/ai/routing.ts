@@ -69,27 +69,41 @@ function generatorFor(step: Step): GenerateJson {
   return openRouterJson;
 }
 
+/** How long to wait before going through the models once more when all of them were busy or offline. */
+const RETRY_PAUSE_MS = 15_000;
+
 /**
  * Asks the first model in line, and moves to the next only when one can't answer right now (its free
  * limit is used up, it's busy, or it's offline). A real problem, such as a wrong key, stops at once.
+ * When every model was busy or offline, which is often a blip such as a laptop just waking up, it
+ * waits a moment and goes through the line once more. A used-up allowance isn't tried again.
  */
-export function routedJson(task: AiTask): GenerateJson {
+export function routedJson(task: AiTask, pauseMs = RETRY_PAUSE_MS): GenerateJson {
   return async (system, prompt, schema) => {
     const chain = modelChain(task);
     if (chain.length === 0) {
       throw new StudioError("Add a free GEMINI_API_KEY (or OPENROUTER_API_KEY) to .env.local, then restart the studio.");
     }
-    let last: AiUnavailableError | null = null;
-    for (const step of chain) {
-      try {
-        return await generatorFor(step)(system, prompt, schema);
-      } catch (error) {
-        if (!(error instanceof AiUnavailableError)) throw error;
-        console.error(`AI ${step.provider}:${step.model} couldn't answer (${error.reason}): ${error.message}`);
-        last = error;
+    let misses: AiUnavailableError[] = [];
+    for (let round = 0; round < 2; round++) {
+      if (round === 1) {
+        if (misses.every((miss) => miss.reason === "limit")) break;
+        console.error(`No AI model answered; trying again in ${Math.round(pauseMs / 1000)} seconds.`);
+        await new Promise((resolve) => setTimeout(resolve, pauseMs));
+      }
+      misses = [];
+      for (const step of chain) {
+        try {
+          return await generatorFor(step)(system, prompt, schema);
+        } catch (error) {
+          if (!(error instanceof AiUnavailableError)) throw error;
+          console.error(`AI ${step.provider}:${step.model} couldn't answer (${error.reason}): ${error.message}`);
+          misses.push(error);
+        }
       }
     }
-    if (last?.reason === "limit") {
+    const last = misses.at(-1);
+    if (misses.every((miss) => miss.reason === "limit")) {
       throw new StudioError("Today's free AI allowance is used up on every model. Try again later, or tomorrow.");
     }
     throw new StudioError(last?.message ?? "No AI model answered, so nothing was saved. Please try again in a few minutes.");

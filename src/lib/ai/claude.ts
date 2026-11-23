@@ -1,12 +1,14 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
 import { StudioError } from "../errors";
+import { AiUnavailableError } from "./errors";
 import type { GenerateJson } from "./writer";
 
 const MODEL = "claude-opus-5-5";
 
 export const claudeJson: GenerateJson = async (system, prompt, schema) => {
-  const client = new Anthropic();
+  // A stuck request gives up after three minutes, so the next model in line can answer instead.
+  const client = new Anthropic({ timeout: 180_000, maxRetries: 1 });
   try {
     const response = await client.beta.messages.parse({
       model: MODEL,
@@ -28,11 +30,15 @@ export const claudeJson: GenerateJson = async (system, prompt, schema) => {
     if (error instanceof Anthropic.AuthenticationError) {
       throw new StudioError("Claude rejected the API key. Check ANTHROPIC_API_KEY in .env.local.");
     }
+    // Busy, limited or unreachable: the next model in line answers instead of the step failing.
     if (error instanceof Anthropic.RateLimitError) {
-      throw new StudioError("Claude's rate limit was reached. Wait a minute and try again.");
+      throw new AiUnavailableError("Claude's rate limit was reached.", "limit");
     }
     if (error instanceof Anthropic.APIConnectionError) {
-      throw new StudioError("Couldn't reach Claude. Check your connection and try again.");
+      throw new AiUnavailableError("Couldn't reach Claude, or it took too long to answer.", "offline");
+    }
+    if (error instanceof Anthropic.InternalServerError || error instanceof Anthropic.RequestTimeoutError) {
+      throw new AiUnavailableError("Claude is busy right now.", "busy");
     }
     throw error;
   }
