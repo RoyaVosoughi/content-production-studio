@@ -4,7 +4,8 @@ import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { studioDb } from "./fixtures/brand";
 import { createLocalDb, type Db } from "@/lib/db/client";
-import type { EditPlan, Phrase, Word } from "@/lib/db/schema";
+import { footage, type EditPlan, type Phrase, type Word } from "@/lib/db/schema";
+import { eq } from "drizzle-orm";
 import {
   addFootage,
   approveAndPublish,
@@ -285,6 +286,31 @@ describe("videos Sam films", () => {
     expect(state.clip?.phrases).toHaveLength(5);
     expect(state.clip?.width).toBe(1280);
     expect(state.problem).toBe("Plan the edit first.");
+  });
+
+  it("shows how far the reading has got while it runs", async () => {
+    const { copyFile, mkdir } = await import("node:fs/promises");
+    const file = "11111111-1111-4111-8111-111111111111.mp4";
+    await mkdir(path.join(dataDir, "footage"), { recursive: true });
+    await copyFile(clipFile, path.join(dataDir, "footage", file));
+    const seen: (string | null)[] = [];
+    let clipId = "";
+    // Reports halfway, then looks at what the page would show before finishing.
+    const watching: Transcriber = async ({ onProgress }) => {
+      onProgress("transcribing", 0.5);
+      for (let tries = 0; tries < 40; tries++) {
+        const [row] = await db.select().from(footage).where(eq(footage.id, clipId));
+        if (row?.stage === "transcribing") {
+          seen.push(`${row.stage} ${row.progress}`);
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      return WORDS;
+    };
+    clipId = await addFootage(db, reel.id, 1, { file, originalName: "take1.mp4", size: (await stat(clipFile)).size }, watching);
+    await waitForJob(`footage:${clipId}`);
+    expect(seen).toEqual(["transcribing 0.5"]);
   });
 
   it("fails clearly on a file that isn't a video, and can try again", async () => {

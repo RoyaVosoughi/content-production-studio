@@ -164,6 +164,8 @@ export type PieceContent = {
   moments?: Moment[];
   /** A short video cut from part of a longer clip: the first and last phrase it keeps. */
   window?: { from: number; to: number };
+  /** A short video of a long clip's main moments: the parts it keeps, joined in the clip's order. */
+  parts?: { from: number; to: number }[];
 };
 
 /** A part of a clip, from one phrase to another, that stands on its own as a short video. */

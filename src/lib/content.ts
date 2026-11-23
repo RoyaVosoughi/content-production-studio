@@ -31,6 +31,7 @@ import {
   postedText,
   slugify,
   uncheckedLinks,
+  VIDEO_FORMATS,
   VIDEO_TITLE_LIMIT,
   type Platform,
   type VideoPlatform,
@@ -40,8 +41,12 @@ import {
   cleanPlan,
   defaultFraming,
   explainerStyleFor,
+  HIGHLIGHT_SECONDS,
+  keptParts,
   MOMENTS_MIN_CLIP,
-  outsideWindow,
+  outsideParts,
+  partsSeconds,
+  pickHighlights,
   SHORT_PLATFORMS,
   simplePlan,
 } from "./video/edit";
@@ -699,7 +704,7 @@ export async function useFootage(db: Db, pieceId: string, basedOn: number, foota
   }
   const old = await pieceVersion(db, pieceId, basedOn);
   // A different clip has different phrases, so the moments and the part kept no longer apply either.
-  const { edit: _edit, thumbnailAt: _at, moments: _moments, window: _window, ...rest } = old.content;
+  const { edit: _edit, thumbnailAt: _at, moments: _moments, window: _window, parts: _parts, ...rest } = old.content;
   await addVersion(db, pieceId, basedOn, { ...rest, footage: footageId }, "edit", old.scenarioVersion);
 }
 
@@ -729,9 +734,9 @@ export async function planVideoEdit(
   const old = await pieceVersion(db, pieceId, basedOn);
   const clip = old.content.footage ? await readyClip(db, old.content.footage) : null;
   if (!clip) throw new StudioError("Wait until your clip is ready, then plan the edit.");
-  // A short video cut from a longer clip keeps only its part: the rest is always cut.
-  const window = old.content.window;
-  const outside = window ? outsideWindow(window, clip.phrases.length) : [];
+  // A short video cut from a longer clip keeps only its parts: the rest is always cut.
+  const parts = keptParts(old.content);
+  const outside = parts ? outsideParts(parts, clip.phrases.length) : [];
   const base: EditPlan = {
     ...simplePlan(old.content.title ?? ""),
     framing: defaultFraming(piece.platform, clip.width, clip.height),
@@ -746,7 +751,7 @@ export async function planVideoEdit(
       phrases: clip.phrases
         .map((phrase, number) => ({ number, start: phrase.start, end: phrase.end, text: phrase.text }))
         .filter((phrase) => !outside.includes(phrase.number)),
-      duration: window ? clip.phrases[window.to].end - clip.phrases[window.from].start : clip.duration,
+      duration: parts ? partsSeconds(parts, clip.phrases) : clip.duration,
       samples: await samplesForEdit(db, piece.platform),
       request: request.trim().slice(0, 2000),
     });
@@ -789,49 +794,112 @@ export async function findClipMoments({ db, writer }: StudioDeps, pieceId: strin
   await addVersion(db, pieceId, basedOn, { ...old.content, moments }, "ai", old.scenarioVersion);
 }
 
-/**
- * Makes one moment of a long clip into a short video on another network: the same clip, with
- * everything outside the moment cut, its title and caption from the moment. When that network
- * already has a video for this idea, this becomes its new version, so nothing you wrote is lost.
- */
-export async function makeShortFromMoment(db: Db, pieceId: string, version: number, index: number, target: string) {
-  const source = await requireVideoPiece(db, pieceId);
-  if (source.currentVersion !== version) throw new StudioError(STALE_PIECE);
+/** The network a short video from a long clip goes to: a Reel, a Short or a LinkedIn video, not the long one's own. */
+function shortTarget(source: { platform: string }, target: string): VideoPlatform {
   if (!SHORT_PLATFORMS.includes(target as VideoPlatform) || target === source.platform) {
     throw new StudioError("Choose a Reel, a Short or a LinkedIn video.");
   }
-  const platform = target as VideoPlatform;
-  const { content, scenarioVersion } = await pieceVersion(db, pieceId, version);
-  const moment = content.moments?.[index];
-  const clip = content.footage ? await readyClip(db, content.footage) : null;
-  if (!moment || !clip || moment.to >= clip.phrases.length) throw new StudioError("That moment is no longer there. Reload and try again.");
+  return target as VideoPlatform;
+}
 
-  const window = { from: moment.from, to: moment.to };
-  const plan = cleanPlan(
-    { ...simplePlan(moment.title), framing: defaultFraming(platform, clip.width, clip.height), cut: outsideWindow(window, clip.phrases.length) },
-    clip.phrases.length,
-  );
-  const short: PieceContent = {
-    body: moment.hook || moment.title,
-    title: moment.title.slice(0, VIDEO_TITLE_LIMIT),
+/**
+ * Puts a short video cut from a long clip on its network: the same clip, with everything outside
+ * its parts cut. When that network already has a video for this idea, this becomes its new
+ * version, so nothing you wrote is lost; a posted one is never changed.
+ */
+async function placeShort(
+  db: Db,
+  source: { ideaId: string },
+  platform: VideoPlatform,
+  clip: Clip,
+  short: { title: string; body: string; window?: { from: number; to: number }; parts?: { from: number; to: number }[] },
+  scenarioVersion: number,
+) {
+  const cut = outsideParts(keptParts(short) ?? [], clip.phrases.length);
+  const content: PieceContent = {
+    ...short,
+    title: short.title.slice(0, VIDEO_TITLE_LIMIT),
     footage: clip.id,
-    window,
-    edit: plan,
+    edit: cleanPlan({ ...simplePlan(short.title), framing: defaultFraming(platform, clip.width, clip.height), cut }, clip.phrases.length),
   };
-
   const [existing] = await db.select().from(pieces).where(and(eq(pieces.ideaId, source.ideaId), eq(pieces.platform, platform)));
   if (existing) {
     const current = await pieceVersion(db, existing.id, existing.currentVersion);
-    const { moments: _moments, thumbnailAt: _at, ...kept } = current.content;
-    await addVersion(db, existing.id, existing.currentVersion, { ...kept, ...short }, "edit", current.scenarioVersion);
+    const { moments: _moments, thumbnailAt: _at, window: _window, parts: _parts, ...kept } = current.content;
+    await addVersion(db, existing.id, existing.currentVersion, { ...kept, ...content }, "edit", current.scenarioVersion);
     return { ideaId: source.ideaId, pieceId: existing.id, platform };
   }
   const made = await db.transaction(async (tx) => {
     const [piece] = await tx.insert(pieces).values({ ideaId: source.ideaId, platform, currentVersion: 1 }).returning({ id: pieces.id });
-    await tx.insert(pieceVersions).values({ pieceId: piece.id, version: 1, content: short, origin: "edit", scenarioVersion });
+    await tx.insert(pieceVersions).values({ pieceId: piece.id, version: 1, content, origin: "edit", scenarioVersion });
     return piece.id;
   });
   return { ideaId: source.ideaId, pieceId: made, platform };
+}
+
+/** Makes one moment of a long clip into a short video on another network, its title and caption from the moment. */
+export async function makeShortFromMoment(db: Db, pieceId: string, version: number, index: number, target: string) {
+  const source = await requireVideoPiece(db, pieceId);
+  if (source.currentVersion !== version) throw new StudioError(STALE_PIECE);
+  const platform = shortTarget(source, target);
+  const { content, scenarioVersion } = await pieceVersion(db, pieceId, version);
+  const moment = content.moments?.[index];
+  const clip = content.footage ? await readyClip(db, content.footage) : null;
+  if (!moment || !clip || moment.to >= clip.phrases.length) throw new StudioError("That moment is no longer there. Reload and try again.");
+  return placeShort(
+    db,
+    source,
+    platform,
+    clip,
+    { title: moment.title, body: moment.hook || moment.title, window: { from: moment.from, to: moment.to } },
+    scenarioVersion,
+  );
+}
+
+/**
+ * Makes one short video of a long clip's main moments, about `seconds` long: the editor chooses
+ * and scores the parts, and the studio keeps the strongest that fit, in the clip's order, so the
+ * video is never longer than asked.
+ */
+export async function makeHighlights({ db, writer }: StudioDeps, pieceId: string, version: number, target: string, seconds: number) {
+  const source = await requireVideoPiece(db, pieceId);
+  if (source.currentVersion !== version) throw new StudioError(STALE_PIECE);
+  const platform = shortTarget(source, target);
+  const { content, scenarioVersion } = await pieceVersion(db, pieceId, version);
+  const clip = content.footage ? await readyClip(db, content.footage) : null;
+  if (!clip) throw new StudioError("Wait until your clip is ready, then make its main moments.");
+  if (clip.duration < MOMENTS_MIN_CLIP) throw new StudioError("This clip is already short. Moments are for clips longer than a minute.");
+  const limit = Math.min(VIDEO_FORMATS[platform].maxSeconds, clip.duration);
+  const length = Math.round(Math.min(limit, Math.max(HIGHLIGHT_SECONDS.min, Number.isFinite(seconds) ? seconds : HIGHLIGHT_SECONDS.default)));
+  const proposal = await writer.findMoments(await writingContext(db, source.language), {
+    title: content.title ?? source.idea.title,
+    phrases: clip.phrases.map((phrase, number) => ({ number, start: phrase.start, end: phrase.end, text: phrase.text })),
+    duration: clip.duration,
+    highlights: length,
+  });
+  const picked = pickHighlights(proposal.moments, clip.phrases, length);
+  if (picked.length === 0) throw new StudioError("The editor didn't find main moments that fit. Try again, or allow a little more time.");
+  const lead = [...picked].sort((a, b) => b.score - a.score)[0];
+  return placeShort(
+    db,
+    source,
+    platform,
+    clip,
+    { title: content.title || lead.title, body: lead.hook || lead.title, parts: picked.map(({ from, to }) => ({ from, to })) },
+    scenarioVersion,
+  );
+}
+
+/**
+ * Lets a short video of one moment or the main moments use the whole clip again, as a new
+ * version, so the editor can choose from all of it. The edit is left out, because it only kept those parts.
+ */
+export async function useWholeClip(db: Db, pieceId: string, basedOn: number) {
+  await requireVideoPiece(db, pieceId);
+  const old = await pieceVersion(db, pieceId, basedOn);
+  if (!keptParts(old.content)) return;
+  const { window: _window, parts: _parts, edit: _edit, thumbnailAt: _at, ...rest } = old.content;
+  await addVersion(db, pieceId, basedOn, rest, "edit", old.scenarioVersion);
 }
 
 /** Starts making the video for exactly the version on screen. */

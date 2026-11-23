@@ -116,8 +116,8 @@ export const MomentsSchema = z.object({
   moments: z
     .array(
       z.object({
-        from: z.number().describe("The phrase number the short video starts at: its first sentence must hook on its own"),
-        to: z.number().describe("The last phrase number it keeps, where the thought ends"),
+        from: z.number().describe("The #number of the phrase the short video starts at, not a time in seconds: its first sentence must hook on its own"),
+        to: z.number().describe("The #number of the last phrase it keeps, where the thought ends, not a time in seconds"),
         title: z.string().describe("A title of at most 60 characters, in the language of the transcript"),
         hook: z.string().describe("The caption's first line: at most 120 characters, in the language of the transcript"),
         why: z.string().describe("One sentence for the author on why this part works alone"),
@@ -301,7 +301,13 @@ export interface WritingModel {
   /** The video editor finds the parts of a long clip that work as short videos on their own. */
   findMoments(
     context: WritingContext,
-    input: { title: string; phrases: { number: number; start: number; end: number; text: string }[]; duration: number },
+    input: {
+      title: string;
+      phrases: { number: number; start: number; end: number; text: string }[];
+      duration: number;
+      /** For one video of the main moments, about this many seconds long, instead of separate shorts. */
+      highlights?: number;
+    },
   ): Promise<MomentsProposal>;
   /** The video editor turns a script into scenes for an animation: cartoon moments, or animated text cards. */
   planAnimation(

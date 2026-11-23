@@ -10,7 +10,7 @@ Nothing is published without your click, and every approval is tied to the exact
 - **One or two languages.** Write in any one of 15 languages, or a pair. With two, every idea and post is written in the main language first, then adapted into the second, as a native writer would phrase it rather than as a word-for-word translation.
 - **An AI team.** Nine writers, each with one job, plus a manager that checks first drafts and a coach that turns your edits and decisions into lessons. You can give each member its own instructions.
 - **Posting.** Telegram, LinkedIn, Instagram and your website, through their official APIs, or by hand (copy, download, then record that you posted) wherever a connection isn't set up.
-- **Video.** Upload the clip you filmed. The studio transcribes it on your computer with Whisper, proposes an edit (cuts, captions, title card, zooms, chapters, and explainer animations synced to your words, with your clip in a picture-in-picture card or the animation full screen), and renders it with FFmpeg in your brand's fonts and colours. It can also animate any script as cartoons or motion graphics, in your brand's colours, a light tech look or a Vox-style editorial collage. From a long clip, it finds the best moments and makes each one its own Reel, Short or LinkedIn video.
+- **Video.** Upload the clip you filmed. The studio transcribes it on your computer with Whisper, proposes an edit (cuts, captions, title card, zooms, chapters, and explainer animations synced to your words, with your clip in a picture-in-picture card or the animation full screen), and renders it with FFmpeg in your brand's fonts and colours. It can also animate any script as cartoons or motion graphics, in your brand's colours, a light tech look or a Vox-style editorial collage. From a long clip, it finds the best moments and makes each one its own Reel, Short or LinkedIn video, or joins its main moments into one short video as long as you choose, such as two minutes.
 - **A ready check before every post.** As you type, the studio checks the post in code, instantly and for free: the network's rules, a hook that fits before "see more", a tired opening, walls of text, long sentences, too many hashtags, numbers without a source, old news, unknown links, and a repeat of a post already live. One click writes the idea's news sources into the post, in its language.
 - **Free while you try it.** It uses OpenRouter's free models by default, and Claude when you add an Anthropic key.
 
@@ -33,7 +33,7 @@ cp .env.example .env.local   # then add OPENROUTER_API_KEY and TAVILY_API_KEY
 npm run dev
 ```
 
-Open http://127.0.0.1:3001. The studio starts on **Setup**:
+Open http://127.0.0.1:3002. The studio starts on **Setup**:
 
 1. Your name and one or two content languages.
 2. For each language: one line on what you do, and your name if it's written differently (for example in another alphabet).

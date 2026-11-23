@@ -4,10 +4,10 @@ import { studioDb } from "./fixtures/brand";
 import { passingTeam } from "./fakes";
 import type { Db } from "@/lib/db/client";
 import { footage, pieces, publications, type Moment, type Phrase } from "@/lib/db/schema";
-import { createPieces, findClipMoments, getPieces, makeShortFromMoment, planVideoEdit, useFootage } from "@/lib/content";
+import { createPieces, findClipMoments, getPieces, makeHighlights, makeShortFromMoment, planVideoEdit, useFootage, useWholeClip } from "@/lib/content";
 import { StudioError } from "@/lib/errors";
 import { approveScenario, decideIdea, generateIdeas, getScenario, writeScenario, type StudioDeps } from "@/lib/studio";
-import { cleanMoments, outsideWindow, windowSeconds } from "@/lib/video/edit";
+import { cleanMoments, outsideParts, outsideWindow, partsSeconds, pickHighlights, windowSeconds } from "@/lib/video/edit";
 
 /** A two-minute talk: twenty phrases of six seconds each. */
 const PHRASES: Phrase[] = Array.from({ length: 20 }, (_, i) => ({
@@ -36,6 +36,39 @@ describe("moments of a long clip", () => {
     expect(cleaned[1]).toMatchObject({ from: 10, to: 12, score: 8 });
     expect(outsideWindow({ from: 2, to: 4 }, 6)).toEqual([0, 1, 5]);
     expect(windowSeconds({ from: 2, to: 4 }, PHRASES)).toBeCloseTo(17.5);
+  });
+
+  it("keeps the strongest main moments that fit the time, in the clip's order", () => {
+    // Each phrase is 5.5 seconds, so 0–2 is 17.5 s, 5–9 is 29.5 s, 12–13 is 11.5 s and 15–19 is 29.5 s.
+    const picked = pickHighlights(
+      [
+        moment({ from: 15, to: 19, score: 9, title: "Strongest" }),
+        moment({ from: 0, to: 2, score: 4, title: "Opening" }),
+        moment({ from: 5, to: 9, score: 8, title: "Second" }),
+        moment({ from: 12, to: 13, score: 6, title: "Short one" }),
+      ],
+      PHRASES,
+      75,
+    );
+    // 29.5 + 29.5 = 59; the opening would make it 76.5, past 75, but the short one fits: 70.5.
+    expect(picked.map((item) => item.title)).toEqual(["Second", "Short one", "Strongest"]);
+    expect(partsSeconds(picked, PHRASES)).toBeCloseTo(70.5);
+    expect(outsideParts([{ from: 1, to: 2 }, { from: 4, to: 4 }], 6)).toEqual([0, 3, 5]);
+  });
+
+  it("reads an answer given in seconds instead of phrase numbers", () => {
+    const cleaned = cleanMoments(
+      [
+        moment({ from: 30, to: 60, score: 8, title: "First" }),
+        moment({ from: 70, to: 100, score: 7, title: "Second" }),
+      ],
+      PHRASES,
+    );
+    // 30 s is said in phrase 5, 60 s after phrase 9 begins; 70 s in phrase 11, 100 s after phrase 16 begins.
+    expect(cleaned.map(({ title, from, to }) => ({ title, from, to }))).toEqual([
+      { title: "First", from: 5, to: 9 },
+      { title: "Second", from: 11, to: 16 },
+    ]);
   });
 });
 
@@ -101,6 +134,61 @@ describe("one long video into short ones", () => {
     expect(planEdit.mock.calls[0][1].duration).toBeCloseTo(29.5);
     const replanned = (await getPiecesFor(db, youtubeId)).find((piece) => piece.platform === "reel")!;
     expect(replanned.current.content.edit?.cut).toEqual([...outsideWindow({ from: 3, to: 7 }, 20), 5].sort((a, b) => a - b));
+  });
+
+  it("lets a short from one moment use the whole clip again, so the editor can choose from all of it", async () => {
+    findMoments.mockResolvedValue({ moments: [moment({ from: 3, to: 7, title: "The surprise" })] });
+    await findClipMoments(deps, youtubeId, 2);
+    const made = await makeShortFromMoment(db, youtubeId, 3, 0, "short");
+    await useWholeClip(db, made.pieceId, 1);
+    const short = (await getPiecesFor(db, youtubeId)).find((piece) => piece.platform === "short")!;
+    expect(short.currentVersion).toBe(2);
+    expect(short.current.content).toMatchObject({ title: "The surprise" });
+    expect(short.current.content.window).toBeUndefined();
+    expect(short.current.content.edit).toBeUndefined();
+
+    planEdit.mockResolvedValue({ level: "full", reason: "", cut: [0, 1], tightenPauses: true, titleCard: "", callouts: [], zooms: [], highlights: [], chapters: [] });
+    await planVideoEdit(deps, short.id, 2, "ai", "Only the main moments, about two minutes.");
+    expect(planEdit.mock.calls[0][1].phrases).toHaveLength(20);
+    expect(planEdit.mock.calls[0][1].request).toBe("Only the main moments, about two minutes.");
+    const planned = (await getPiecesFor(db, youtubeId)).find((piece) => piece.platform === "short")!;
+    expect(planned.current.content.edit?.cut).toEqual([0, 1]);
+  });
+
+  it("makes the main moments into one Short no longer than asked, and plans only those parts", async () => {
+    findMoments.mockResolvedValue({
+      moments: [
+        moment({ from: 15, to: 19, score: 9, title: "Strongest", hook: "The one thing to remember." }),
+        moment({ from: 0, to: 2, score: 4, title: "Opening" }),
+        moment({ from: 5, to: 9, score: 8, title: "Second" }),
+      ],
+    });
+    const made = await makeHighlights(deps, youtubeId, 2, "short", 60);
+    expect(findMoments.mock.calls[0][1].highlights).toBe(60);
+    const short = (await getPiecesFor(db, youtubeId)).find((piece) => piece.platform === "short")!;
+    expect(short.id).toBe(made.pieceId);
+    const content = short.current.content;
+    expect(content).toMatchObject({ title: "The long talk", body: "The one thing to remember.", parts: [{ from: 5, to: 9 }, { from: 15, to: 19 }] });
+    expect(content.edit?.cut).toEqual(outsideParts([{ from: 5, to: 9 }, { from: 15, to: 19 }], 20));
+
+    // The editor then sees only those parts, and the rest stays cut.
+    planEdit.mockResolvedValue({ level: "light", reason: "", cut: [], tightenPauses: true, titleCard: "", callouts: [], zooms: [], highlights: [], chapters: [] });
+    await planVideoEdit(deps, short.id, 1, "ai");
+    expect(planEdit.mock.calls[0][1].phrases.map((phrase: { number: number }) => phrase.number)).toEqual([5, 6, 7, 8, 9, 15, 16, 17, 18, 19]);
+    expect(planEdit.mock.calls[0][1].duration).toBeCloseTo(59);
+
+    // Never longer than the network allows, and never less than half a minute.
+    findMoments.mockClear();
+    await makeHighlights(deps, youtubeId, 2, "reel", 900);
+    expect(findMoments.mock.calls[0][1].highlights).toBe(120);
+    await makeHighlights(deps, youtubeId, 2, "reel", 5);
+    expect(findMoments.mock.calls[1][1].highlights).toBe(30);
+    await expect(makeHighlights(deps, youtubeId, 2, "youtube", 60)).rejects.toThrow("Choose a Reel, a Short or a LinkedIn video.");
+
+    // Back to the whole clip.
+    await useWholeClip(db, made.pieceId, 2);
+    const whole = (await getPiecesFor(db, youtubeId)).find((piece) => piece.platform === "short")!;
+    expect(whole.current.content.parts).toBeUndefined();
   });
 
   it("adds a new version to a video that already exists, but never changes a posted one", async () => {

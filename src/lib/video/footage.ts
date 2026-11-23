@@ -149,8 +149,13 @@ export async function processFootage(db: Db, id: string, transcribe: Transcriber
   const [clip] = await db.select().from(footage).where(eq(footage.id, id));
   if (!clip) return;
   const file = footagePath(clip.file);
-  const set = (fields: Partial<typeof footage.$inferInsert>) =>
-    db.update(footage).set({ ...fields, updatedAt: new Date() }).where(eq(footage.id, id));
+  // Async, so a call runs at once even when nothing waits for it, as the progress updates don't:
+  // a Drizzle query only runs when awaited.
+  const set = async (fields: Partial<typeof footage.$inferInsert>) => {
+    await db.update(footage).set({ ...fields, updatedAt: new Date() }).where(eq(footage.id, id));
+  };
+  /** Saves progress without waiting; a progress update that fails never stops the work. */
+  const report = (fields: Partial<typeof footage.$inferInsert>) => void set(fields).catch((error) => console.error("Couldn't save progress:", error));
   const audioFile = path.join(/*turbopackIgnore: true*/ FOOTAGE_DIR(), `${id}.f32`);
 
   try {
@@ -173,7 +178,7 @@ export async function processFootage(db: Db, id: string, transcribe: Transcriber
         // Progress is saved at most every second, so the database isn't flooded.
         if (Date.now() - lastWrite < 1000 && progress < 1) return;
         lastWrite = Date.now();
-        void set({ stage, progress });
+        report({ stage, progress });
       },
     });
     const phrases = buildPhrases(words);

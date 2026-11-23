@@ -6,7 +6,7 @@
   "license": "MIT",
   "type": "module",
   "scripts": {
-    "dev": "next dev -H 127.0.0.1 -p 3001",
+    "dev": "next dev -H 127.0.0.1 -p 3002",
     "build": "next build",
     "start": "next start -H 127.0.0.1",
     "typecheck": "tsc --noEmit",
@@ -19,7 +19,7 @@
     "@tavily/core": "^1.0.0",
     "drizzle-orm": "^0.45.4",
     "mammoth": "1.13.0",
-    "next": "^16.4.5",
+    "next": "^16.4.6",
     "playwright-core": "^1.56.1",
     "postgres": "^4.0.0",
     "react": "^19.3.1",

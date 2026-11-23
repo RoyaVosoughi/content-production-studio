@@ -286,6 +286,14 @@ const EXPLAINER_RULES = `- Explainers: the studio draws an animation over parts 
 - For a step-by-step process, make each step its own short item, big and clear, in the order said. Beside the card (pip) there is room for at most 3 items.
 - Don't add callouts or zooms on phrases an explainer covers.`;
 
+/**
+ * A transcript as the editor reads it. The phrase number comes first, marked with #, and the
+ * times follow in brackets, so the AI can't take a time in seconds for a phrase number.
+ */
+function transcriptLines(phrases: { number: number; start: number; end: number; text: string }[]): string {
+  return phrases.map((phrase) => `#${phrase.number} (${phrase.start.toFixed(1)}s–${phrase.end.toFixed(1)}s) ${phrase.text}`).join("\n");
+}
+
 /** The prompts from {OWNER}'s prompt file that fit this edit. */
 function editPromptsBlock(prompts: EditPrompt[]): string {
   if (!prompts.length) return "";
@@ -424,7 +432,7 @@ Adapt the scenario to how people read on this platform. Do not paste its section
       return run(
         "editor",
         context,
-        `{OWNER} filmed a video for ${EDIT_GOALS[platform]}. Below is the transcript of their clip, split into numbered phrases with their start and end in seconds. The clip is ${Math.round(duration)} seconds long, and this network allows up to ${limit} seconds.
+        `{OWNER} filmed a video for ${EDIT_GOALS[platform]}. Below is the transcript of their clip, split into numbered phrases. Each line is #number (start–end in seconds) text. Wherever you name a phrase, use its #number, never a time in seconds. The clip is ${Math.round(duration)} seconds long, and this network allows up to ${limit} seconds.
 
 Decide what edit this clip needs. Choose light when the take is clean and already the right length: keep almost everything and add captions. Choose full when it has false starts, repeated takes, mistakes, long pauses or a slow start, or when it's too long: cut those and add motion to hold attention.
 
@@ -440,17 +448,42 @@ ${explaining ? EXPLAINER_RULES : "- Leave explainers empty."}
 <video_title>${title}</video_title>
 <script>${JSON.stringify(script)}</script>
 <transcript>
-${phrases.map((phrase) => `${phrase.number} [${phrase.start.toFixed(1)}–${phrase.end.toFixed(1)}] ${phrase.text}`).join("\n")}
+${transcriptLines(phrases)}
 </transcript>${request?.trim() ? `\n\n{OWNER} asked for this edit:\n<owner_request>${request.trim()}</owner_request>` : ""}${editPromptsBlock(prompts)}${samplesBlock(samples)}`,
         EditProposalSchema,
       );
     },
 
-    findMoments(context, { title, phrases, duration }) {
+    findMoments(context, { title, phrases, duration, highlights }) {
+      const intro = `{OWNER} filmed a ${Math.max(1, Math.round(duration / 60))}-minute video. Below is its transcript, split into numbered phrases. Each line is #number (start–end in seconds) text. Wherever you name a phrase, use its #number, never a time in seconds.`;
+      const transcript = `<video_title>${title}</video_title>
+<transcript>
+${transcriptLines(phrases)}
+</transcript>`;
+      if (highlights) {
+        return run(
+          "editor",
+          context,
+          `${intro}
+
+Choose the parts that carry its main points, to be joined in their order into one short vertical video of about ${Math.round(highlights)} seconds, for people who never saw the long one.
+
+Rules:
+- Choose 5 to 10 parts, each 15 to 45 seconds, that together come to at least ${Math.round(highlights * 1.6)} seconds: add up their lengths from the times before you answer. The studio keeps the strongest ones until the video is full, so offer more than fits and score each honestly.
+- Each part is one complete thought: it starts at the beginning of a sentence and ends where the thought ends, never mid-sentence. When in doubt, end a phrase or two later rather than earlier.
+- Give the part that best hooks a stranger the highest score: a surprising claim, a number, a question or a problem.
+- Skip introductions, sponsor reads, repeated points, asides and goodbyes.
+- Parts don't overlap.
+- The title is a short label for the part. The hook of the highest-scored part becomes the video's caption. Write them and why in the language of the transcript.
+
+${transcript}`,
+          MomentsSchema,
+        );
+      }
       return run(
         "editor",
         context,
-        `{OWNER} filmed a ${Math.max(1, Math.round(duration / 60))}-minute video. Below is its transcript, split into numbered phrases with their start and end in seconds.
+        `${intro}
 
 Find the 3 to 5 parts that would work as short vertical videos of their own (an Instagram Reel, a YouTube Short or a LinkedIn video), for people who never saw the long one.
 
@@ -462,10 +495,7 @@ Rules:
 - Parts don't overlap. Put the strongest first, and score honestly: most parts are 5 to 8.
 - Write the title, hook and why in the language of the transcript.
 
-<video_title>${title}</video_title>
-<transcript>
-${phrases.map((phrase) => `${phrase.number} [${phrase.start.toFixed(1)}–${phrase.end.toFixed(1)}] ${phrase.text}`).join("\n")}
-</transcript>`,
+${transcript}`,
         MomentsSchema,
       );
     },

@@ -306,8 +306,13 @@ export async function renderVideo(
 ): Promise<void> {
   const { key, platform, language, content, clip, brand } = input;
   const plan = content.edit!;
-  const set = (fields: Partial<typeof videoRenders.$inferInsert>) =>
-    db.update(videoRenders).set({ ...fields, updatedAt: new Date() }).where(eq(videoRenders.key, key));
+  // Async, so a call runs at once even when nothing waits for it, as the progress updates don't:
+  // a Drizzle query only runs when awaited.
+  const set = async (fields: Partial<typeof videoRenders.$inferInsert>) => {
+    await db.update(videoRenders).set({ ...fields, updatedAt: new Date() }).where(eq(videoRenders.key, key));
+  };
+  /** Saves progress without waiting; a progress update that fails never stops the work. */
+  const report = (fields: Partial<typeof videoRenders.$inferInsert>) => void set(fields).catch((error) => console.error("Couldn't save progress:", error));
   const work = await mkdtemp(path.join(/*turbopackIgnore: true*/ os.tmpdir(), "studio-render-"));
   try {
     const source = footagePath(clip.file);
@@ -333,7 +338,7 @@ export async function renderVideo(
 
     // Explainers are drawn first, each as a short video, and take the first part of the progress bar.
     const share = windows.length > 0 ? 0.4 : 0;
-    const explainers = await drawExplainers({ windows, plan, platform, language, brand, work, frames, onProgress: (progress) => void set({ progress: share * progress }) });
+    const explainers = await drawExplainers({ windows, plan, platform, language, brand, work, frames, onProgress: (progress) => report({ progress: share * progress }) });
     const box = pipBox(platform, languageInfo(language).dir === "rtl");
     let pip: { box: PipBox; mask: string } | null = null;
     if (explainers.some((item) => item.mode === "pip")) {
@@ -353,7 +358,7 @@ export async function renderVideo(
           const match = line.match(/^out_time_us=(\d+)/);
           if (!match || Date.now() - lastWrite < 1000) return;
           lastWrite = Date.now();
-          void set({ progress: Math.min(0.99, share + (1 - share) * (Number(match[1]) / 1e6 / total)) });
+          report({ progress: Math.min(0.99, share + (1 - share) * (Number(match[1]) / 1e6 / total)) });
         },
       },
     );

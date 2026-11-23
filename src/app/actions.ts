@@ -486,6 +486,24 @@ export async function makeShortAction(_: ActionState, form: FormData) {
   return state;
 }
 
+/** One short video of a long clip's main moments, as long as asked; opens that video's tab. */
+export async function makeHighlightsAction(_: ActionState, form: FormData) {
+  let to: string | null = null;
+  const state = await perform(async () => {
+    const made = await content.makeHighlights(await studio.defaultDeps(), text(form, "pieceId"), versionFrom(form), text(form, "platform"), Number(text(form, "seconds")));
+    to = `/${uiFrom(form)}/ideas/${made.ideaId}/content#post-${made.platform}`;
+  });
+  if (!state && to) redirect(to);
+  return state;
+}
+
+/** A short video made from one moment goes back to the whole clip, for the editor to choose from. */
+export async function useWholeClipAction(_: ActionState, form: FormData) {
+  return perform(async () => {
+    await content.useWholeClip(await getDb(), text(form, "pieceId"), versionFrom(form));
+  });
+}
+
 export async function makeVideoAction(_: ActionState, form: FormData) {
   return perform(async () => {
     await content.makeVideo(await getDb(), text(form, "pieceId"), versionFrom(form));

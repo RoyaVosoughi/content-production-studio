@@ -429,16 +429,46 @@ ${lines.join("\n")}
 
 /** Clips at least this long get "Best moments for Shorts". */
 export const MOMENTS_MIN_CLIP = 60;
-const MOMENT_SECONDS = { min: 8, max: 90 };
-const MOMENT_LIMIT = 5;
+type MomentLimits = { min: number; max: number; count: number };
+/** A moment that is a short video by itself. */
+const SHORT_MOMENT: MomentLimits = { min: 8, max: 90, count: 5 };
+/** A part of a video of the main moments: shorter, and more of them. */
+const HIGHLIGHT_PART: MomentLimits = { min: 4, max: 60, count: 12 };
 /** Where a short video can go: the vertical and 4:5 networks. */
 export const SHORT_PLATFORMS: VideoPlatform[] = ["reel", "short", "linkedin_video"];
+
+/**
+ * Reads the editor's answer as times in seconds, which it sometimes gives where phrase numbers
+ * belong: each moment runs from the phrase being said at its start to the last one begun before its end.
+ */
+function fromSeconds(moments: Moment[], phrases: Phrase[]): Moment[] {
+  const last = phrases.length - 1;
+  if (last < 0) return [];
+  const at = (time: number) => Math.max(0, phrases.findIndex((phrase) => phrase.end > time));
+  const until = (time: number) => {
+    const index = phrases.findLastIndex((phrase) => phrase.start < time);
+    return index < 0 ? 0 : index;
+  };
+  return moments.map((moment) => {
+    const start = Math.min(moment.from, moment.to);
+    const end = Math.max(moment.from, moment.to);
+    const from = phrases[last].end <= start ? last : at(start);
+    return { ...moment, from, to: Math.max(from, until(end)) };
+  });
+}
 
 /**
  * The editor's moments, made safe: on real phrases, a usable length, without overlaps, strongest
  * first. When two overlap, the stronger one stays.
  */
-export function cleanMoments(moments: Moment[], phrases: Phrase[]): Moment[] {
+export function cleanMoments(moments: Moment[], phrases: Phrase[], limits: MomentLimits = SHORT_MOMENT): Moment[] {
+  const asNumbers = cleanOnPhrases(moments, phrases, limits);
+  // When the answer only makes sense as seconds, it is read that way instead.
+  const asSeconds = moments.some((moment) => Math.max(moment.from, moment.to) > phrases.length - 1) ? cleanOnPhrases(fromSeconds(moments, phrases), phrases, limits) : [];
+  return asSeconds.length > asNumbers.length ? asSeconds : asNumbers;
+}
+
+function cleanOnPhrases(moments: Moment[], phrases: Phrase[], limits: MomentLimits): Moment[] {
   const last = phrases.length - 1;
   const usable = moments
     .map((moment) => {
@@ -456,16 +486,53 @@ export function cleanMoments(moments: Moment[], phrases: Phrase[]): Moment[] {
     .filter((moment) => moment.from >= 0 && moment.to <= last && moment.title)
     .filter((moment) => {
       const seconds = phrases[moment.to].end - phrases[moment.from].start;
-      return seconds >= MOMENT_SECONDS.min && seconds <= MOMENT_SECONDS.max;
+      return seconds >= limits.min && seconds <= limits.max;
     })
     .sort((a, b) => b.score - a.score || a.from - b.from);
   const kept: Moment[] = [];
   for (const moment of usable) {
-    if (kept.length >= MOMENT_LIMIT) break;
+    if (kept.length >= limits.count) break;
     if (kept.some((other) => moment.from <= other.to && other.from <= moment.to)) continue;
     kept.push(moment);
   }
   return kept;
+}
+
+type ClipPart = { from: number; to: number };
+
+/** The parts of the clip a video keeps: one moment, the main moments, or null for the whole clip. */
+export function keptParts(content: { window?: ClipPart; parts?: ClipPart[] }): ClipPart[] | null {
+  if (content.window) return [content.window];
+  return content.parts?.length ? content.parts : null;
+}
+
+/** The phrases a video of some parts leaves out: everything outside them. */
+export function outsideParts(parts: ClipPart[], phraseCount: number): number[] {
+  return Array.from({ length: phraseCount }, (_, number) => number).filter((number) => !parts.some((part) => number >= part.from && number <= part.to));
+}
+
+/** How long some parts of the clip are together, in seconds. */
+export function partsSeconds(parts: ClipPart[], phrases: Phrase[]): number {
+  return parts.reduce((sum, part) => sum + windowSeconds(part, phrases), 0);
+}
+
+/** The shortest and longest seconds the main moments of a long clip can come to. */
+export const HIGHLIGHT_SECONDS = { min: 30, default: 120 };
+
+/**
+ * The main moments of a long clip for one video of about `seconds`: the strongest parts that fit,
+ * then put back in the clip's order, so the video follows the talk.
+ */
+export function pickHighlights(moments: Moment[], phrases: Phrase[], seconds: number): Moment[] {
+  const picked: Moment[] = [];
+  let total = 0;
+  for (const moment of cleanMoments(moments, phrases, HIGHLIGHT_PART)) {
+    const length = windowSeconds(moment, phrases);
+    if (total + length > seconds) continue;
+    picked.push(moment);
+    total += length;
+  }
+  return picked.sort((a, b) => a.from - b.from);
 }
 
 /** The phrases a short video leaves out: everything before and after its part of the clip. */

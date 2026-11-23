@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useId, useRef, useState } from "react";
 import {
   findMomentsAction,
+  makeHighlightsAction,
   makeShortAction,
   makeVideoAction,
   markPostedByHandAction,
@@ -11,6 +12,7 @@ import {
   retryFootageAction,
   savePieceAction,
   useFootageAction,
+  useWholeClipAction,
 } from "@/app/actions";
 import type { EditPlan, Explainer, ExplainerStyle, IdeaSource, Moment, PieceContent, Phrase, ScriptPart } from "@/lib/db/schema";
 import type { RecentPost } from "@/lib/quality";
@@ -23,9 +25,11 @@ import {
   EXPLAINER_KINDS,
   EXPLAINER_STYLES,
   formatTime,
+  HIGHLIGHT_SECONDS,
   keepRanges,
   MOMENTS_MIN_CLIP,
   outputDuration,
+  partsSeconds,
   SHORT_PLATFORMS,
   windowSeconds,
 } from "@/lib/video/edit";
@@ -229,16 +233,29 @@ export function VideoEditor({
         <div className="mt-5 space-y-4">
           <ClipSection piece={piece} video={video} dirty={dirty} hidden={hidden} language={language} t={t} />
 
-          {content.window && phrases[content.window.to] && (
-            <p className="rounded-lg border-s-4 border-cobalt bg-canvas p-3 text-sm" data-window>
-              {t.moments.window
-                .replace("{from}", formatTime(phrases[content.window.from].start))
-                .replace("{to}", formatTime(phrases[content.window.to].end))
-                .replace("{duration}", formatTime(windowSeconds(content.window, phrases)))}
-            </p>
+          {((content.window && phrases[content.window.to]) || (content.parts?.length && content.parts.every((part) => phrases[part.to]))) && (
+            <div className="space-y-2 rounded-lg border-s-4 border-cobalt bg-canvas p-3 text-sm" data-window>
+              <p>
+                {content.window
+                  ? t.moments.window
+                      .replace("{from}", formatTime(phrases[content.window.from].start))
+                      .replace("{to}", formatTime(phrases[content.window.to].end))
+                      .replace("{duration}", formatTime(windowSeconds(content.window, phrases)))
+                  : t.moments.parts
+                      .replace("{count}", (content.parts ?? []).length.toLocaleString(uiLocale(language)))
+                      .replace("{duration}", formatTime(partsSeconds(content.parts ?? [], phrases)))}
+              </p>
+              <ActionForm action={useWholeClipAction} className="flex flex-wrap items-center gap-3">
+                {hidden}
+                <SubmitButton pendingLabel={t.moments.usingWholeClip} disabled={dirty}>
+                  {t.moments.wholeClip}
+                </SubmitButton>
+                <span className="text-ink-soft">{t.moments.wholeClipHint}</span>
+              </ActionForm>
+            </div>
           )}
 
-          {clip?.status === "ready" && (clip.duration ?? 0) >= MOMENTS_MIN_CLIP && !content.window && (
+          {clip?.status === "ready" && (clip.duration ?? 0) >= MOMENTS_MIN_CLIP && !content.window && !content.parts?.length && (
             <MomentsSection
               platform={platform}
               moments={content.moments ?? []}
@@ -960,6 +977,34 @@ function MomentsSection({
           {moments.length ? m.again : m.find}
         </SubmitButton>
       </ActionForm>
+      <div className="border-t border-mist pt-3" data-highlights>
+      <ActionForm action={makeHighlightsAction} className="space-y-2">
+        {hidden}
+        <input type="hidden" name="ui" value={language} />
+        <h4 className="font-semibold">{m.highlightsTitle}</h4>
+        <p className="text-sm text-ink-soft">{m.highlightsHint}</p>
+        <div className="flex flex-wrap items-end gap-3">
+          <label className="block text-sm">
+            <span className="label mb-1 block">{t.videoStudio.platformLabel}</span>
+            <select name="platform" defaultValue={targets.find((target) => !taken[target]) ?? targets[0]} className="field">
+              {targets.map((target) => (
+                <option key={target} value={target} disabled={taken[target] === true}>
+                  {platformLabel(target, language)}
+                  {taken[target] ? ` (${m.posted})` : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="block text-sm">
+            <span className="label mb-1 block">{m.highlightsLength}</span>
+            <input name="seconds" type="number" min={HIGHLIGHT_SECONDS.min} max={180} step={5} defaultValue={HIGHLIGHT_SECONDS.default} dir="ltr" className="field w-28" />
+          </label>
+          <SubmitButton pendingLabel={m.highlightsMaking} disabled={dirty}>
+            {m.highlightsMake}
+          </SubmitButton>
+        </div>
+      </ActionForm>
+      </div>
     </section>
   );
 }
