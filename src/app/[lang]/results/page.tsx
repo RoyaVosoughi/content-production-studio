@@ -7,7 +7,8 @@ import { languageName, textDirection, uiLocale, type UiLanguage as Language } fr
 import { readyPage } from "@/lib/view";
 import { platformLabel, PLATFORMS, RESULT_METRICS, type Metric, type Platform } from "@/lib/platforms";
 import { bestAndWorst, patternsOf, weeklySummary, type Group } from "@/lib/insights";
-import { MIN_TO_COMPARE, pillarSummary, resultsOverview, type RankedRow, type Standing } from "@/lib/results";
+import { hookOverview, MIN_TO_COMPARE, pillarSummary, resultsOverview, type RankedRow, type Standing } from "@/lib/results";
+import type { HookTally } from "@/lib/hooks";
 
 export const dynamic = "force-dynamic";
 
@@ -25,6 +26,7 @@ export default async function ResultsPage({ params }: { params: Promise<{ lang: 
   const waiting = rows.filter((row) => !row.numbers);
   const measured = rows.filter((row) => row.numbers);
   const pillars = pillarSummary(rows);
+  const hooks = await hookOverview(db);
   const number = formatNumber(lang);
   const networks = PLATFORMS.filter((platform) => measured.some((row) => row.platform === platform));
 
@@ -83,6 +85,8 @@ export default async function ResultsPage({ params }: { params: Promise<{ lang: 
               </ul>
             </section>
           )}
+
+          <Hooks tallies={hooks} lang={lang} t={t} />
 
           {measured.length > 0 && (
             <section className="mt-10" aria-labelledby="measured">
@@ -346,5 +350,36 @@ function Sources({ rows, lang, t }: { rows: RankedRow[]; lang: Language; t: Stri
         </section>
       )}
     </div>
+  );
+}
+
+/** Which kind of hook you pick, and how live posts did by the kind they opened with. */
+function Hooks({ tallies, lang, t }: { tallies: HookTally[]; lang: Language; t: Strings }) {
+  const number = formatNumber(lang);
+  return (
+    <section className="mt-10" aria-labelledby="hooks" data-hook-results>
+      <h2 id="hooks" className="font-display text-xl font-semibold">
+        {t.hooks.resultsTitle}
+      </h2>
+      <p className="mt-1 max-w-2xl text-sm text-ink-soft">{t.hooks.resultsIntro}</p>
+      {tallies.length === 0 ? (
+        <p className="mt-3 text-ink-soft">{t.hooks.resultsEmpty}</p>
+      ) : (
+        <ul className="mt-4 space-y-3">
+          {tallies.map((tally) => (
+            <li key={tally.kind} data-hook-kind={tally.kind}>
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <span className="font-medium">{t.hooks.kinds[tally.kind]}</span>
+                <span className="label">
+                  {tally.score !== null ? t.resultsScore.replace("{score}", number(tally.score, 1)) : t.hooks.noScore} ·{" "}
+                  {t.hooks.picked.replace("{n}", number(tally.picked))} · {t.hooks.live.replace("{n}", number(tally.live))}
+                </span>
+              </div>
+              {tally.score !== null && <ScoreBar score={tally.score} />}
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }

@@ -31,6 +31,7 @@ import {
 } from "@/lib/platforms";
 import { hasPlaceholder } from "@/lib/scenario";
 import { ActionForm, SubmitButton } from "./action-form";
+import { HookPicker } from "./hook-picker";
 import { PiecePreview, type PreviewBrand } from "./piece-preview";
 import { PostImageEditor } from "./post-image-editor";
 import { ReadyCheckPanel, SourcesBox } from "./ready-check";
@@ -260,6 +261,8 @@ export function PieceTools({
 }) {
   return (
     <>
+      <HookPicker platform={piece.platform} content={piece.content} hidden={hidden} dirty={dirty} t={t} />
+
       <ActionForm action={changePieceAction} resetOnSuccess className="space-y-2">
         {hidden}
         <label className="block">

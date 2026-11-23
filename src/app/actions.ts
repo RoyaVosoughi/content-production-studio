@@ -24,12 +24,13 @@ import { cookies } from "next/headers";
 import { isPlatform } from "@/lib/platforms";
 import { isAnimationStyle, type AnimationStyle } from "@/lib/video/animation";
 import * as results from "@/lib/results";
-import { startScoutJob } from "@/lib/scout-job";
+import { clearScoutNote, noteScoutRunning, scoutIsRunning, startScoutJob } from "@/lib/scout-job";
 import * as studio from "@/lib/studio";
 
 export type ActionState = { error?: string; /** A short result to show, such as how many posts were updated. */ notice?: string } | null;
 
 const MAX_REQUEST_LENGTH = 2000;
+const SCOUT_BUSY = "The Idea Scout is still finishing its last search. Try again in a minute.";
 
 const text = (form: FormData, name: string) => String(form.get(name) ?? "").trim();
 const lines = (form: FormData, name: string) =>
@@ -138,14 +139,20 @@ export async function generateIdeasAction(_: ActionState, form: FormData): Promi
     if (text(form, "mode") === "topic" && !focus) throw new StudioError("Write a topic or paste a link first.");
     if (focus.length > MAX_REQUEST_LENGTH) throw new StudioError("Please shorten your request.");
     const language = languageFrom(form);
+    if (scoutIsRunning()) throw new StudioError(SCOUT_BUSY);
+    // Written first, so a restart mid-search can say what happened. Cleared once it finishes.
+    await noteScoutRunning(language);
     const job = startScoutJob(
       language,
       async (stopIfAsked) =>
         (await studio.generateIdeas(await studio.defaultDeps(), language, focus, stopIfAsked, { onlyMine: form.get("onlyMine") === "on" })).length,
       messageFor,
-      () => void studio.learnInBackground(),
+      () => {
+        void clearScoutNote().catch((error) => console.error("Couldn't clear the search note:", error));
+        void studio.learnInBackground();
+      },
     );
-    if (!job) throw new StudioError("The Idea Scout is still finishing its last search. Try again in a minute.");
+    if (!job) throw new StudioError(SCOUT_BUSY);
   } catch (error) {
     return { error: messageFor(error) };
   }
@@ -360,6 +367,20 @@ export async function removeImageAction(_: ActionState, form: FormData) {
 export async function changePieceAction(_: ActionState, form: FormData) {
   return perform(async () => {
     await content.changePieceWithAi(await studio.defaultDeps(), text(form, "pieceId"), versionFrom(form), requestFrom(form));
+  });
+}
+
+export async function pickHookAction(_: ActionState, form: FormData) {
+  return perform(async () => {
+    const index = Number(text(form, "hook"));
+    if (!Number.isInteger(index) || index < 0) throw new StudioError("Unknown hook. Reload and try again.");
+    await content.pickHook(await getDb(), text(form, "pieceId"), versionFrom(form), index);
+  });
+}
+
+export async function suggestHooksAction(_: ActionState, form: FormData) {
+  return perform(async () => {
+    await content.suggestHooks(await studio.defaultDeps(), text(form, "pieceId"), versionFrom(form));
   });
 }
 

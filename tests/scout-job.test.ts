@@ -59,3 +59,30 @@ describe("the idea scout's background search", () => {
     expect(currentScoutJob()).toMatchObject({ status: "failed", error: "No search key" });
   });
 });
+
+describe("a search cut off by a restart", () => {
+  it("shows as failed with a message when the studio starts again, once", async () => {
+    const { mkdtemp, rm } = await import("node:fs/promises");
+    const os = await import("node:os");
+    const path = await import("node:path");
+    const { noteScoutRunning, clearScoutNote, recoverCutOffScout } = await import("@/lib/scout-job");
+    const dir = await mkdtemp(path.join(os.tmpdir(), "studio-scout-note-"));
+    try {
+      // A search that finished leaves nothing behind.
+      await noteScoutRunning("fa", dir);
+      await clearScoutNote(dir);
+      delete (globalThis as { __studioScoutJob?: unknown }).__studioScoutJob;
+      expect(await recoverCutOffScout(dir)).toBe(false);
+      expect(currentScoutJob()).toBeNull();
+
+      // One cut off by a restart: the studio starts with nothing in memory, but the note is there.
+      await noteScoutRunning("fa", dir);
+      expect(await recoverCutOffScout(dir)).toBe(true);
+      expect(currentScoutJob()).toMatchObject({ status: "failed", language: "fa", error: expect.stringMatching(/nothing was saved/) });
+      expect(scoutIsRunning()).toBe(false);
+      expect(await recoverCutOffScout(dir)).toBe(false);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});

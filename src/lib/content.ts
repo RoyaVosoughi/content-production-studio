@@ -2,7 +2,7 @@ import { pickFor } from "./channels";
 import { samplesForEdit } from "./agents/editor/samples";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { agentForPlatform } from "./agents/roster";
-import { describeEdit, getTeamSettings, managerCheck, recordOwnerFeedback, saveVerdict } from "./agents/team";
+import { describeEdit, getTeamSettings, managerCheck, recordOwnerFeedback, recordSignal, saveVerdict } from "./agents/team";
 import type { Db } from "./db/client";
 import { getDb } from "./db/client";
 import {
@@ -56,9 +56,11 @@ import { PUBLISHERS } from "./publishers";
 import { PublishRejected, type Publisher } from "./publishers/types";
 import { hasPlaceholder } from "./scenario";
 import { getScenario, getSibling, requireIdea, writingContext, type StudioDeps } from "./studio";
-import type { WritingContext } from "./ai/types";
+import type { Feedback, WritingContext } from "./ai/types";
 import type { ScenarioContent } from "./db/schema";
 import { cleanImage, IMAGE_SIZES, imageAlt, imageProblem, type PostImage } from "./post-image";
+import { applyHook, cleanHooks, currentHook, finishHooks, HOOK_COUNT, hookKindOf } from "./hooks";
+import { hookRecord } from "./results";
 
 const STALE_PIECE = "This post changed since you opened it. Reload and review the latest version.";
 /** A send that never reported back, because the app stopped mid-post, is treated as unknown after this long. */
@@ -206,11 +208,15 @@ async function writeChecked(
   },
 ) {
   const brief = { platform, scenario, sources, channel };
+  // The writer hears which kinds of hook work here, and its three options come back with the post.
+  const hooks = await hookRecord(db, platform);
+  const written = async (feedback?: Feedback) =>
+    finish(finishHooks(platform, await writer.writePiece(context, { ...brief, hookRecord: hooks, feedback })));
   return managerCheck(db, {
     enabled,
     agent: agentForPlatform(platform),
     language: context.language,
-    draft: finish(await writer.writePiece(context, brief)),
+    draft: await written(),
     ruleProblem: (draft) => {
       const problem = contentProblem(platform, draft);
       if (problem) return problem;
@@ -221,7 +227,7 @@ async function writeChecked(
       return links.length ? `It links to addresses that aren't in the sources: ${links.join(", ")}. Use only the supplied sources.` : null;
     },
     review: (content) => writer.reviewPiece(context, { ...brief, content }),
-    rewrite: async (feedback) => finish(await writer.writePiece(context, { ...brief, feedback })),
+    rewrite: (feedback) => written(feedback),
   });
 }
 
@@ -373,7 +379,8 @@ export async function rewritePieceFromScenario({ db, writer }: StudioDeps, piece
     scenario: scenario.current.content,
     sources: idea.sources.map(({ title, url }) => ({ title, url })),
     channel: pickFor(scenario.channels, piece.platform),
-    finish: (written) => ({ ...old.content, ...written }),
+    // New hooks come with the new draft, and none of them is your pick yet.
+    finish: (written) => ({ ...old.content, ...written, hookChosen: false }),
   });
   await addVersion(db, pieceId, basedOn, draft, "ai", scenario.currentVersion);
   await saveVerdict(
@@ -414,6 +421,51 @@ export async function setPieceImage(db: Db, pieceId: string, basedOn: number, va
   const problem = imageProblem(image);
   if (problem) throw new StudioError(problem);
   await addVersion(db, pieceId, basedOn, { ...rest, image }, "edit", old.scenarioVersion);
+}
+
+/**
+ * Opens the post with one of its hooks, as a new version. The writer and the coach hear which kind
+ * you chose over which, so the team learns what kind of opening you prefer.
+ */
+export async function pickHook(db: Db, pieceId: string, basedOn: number, index: number) {
+  const piece = await requirePiece(db, pieceId);
+  if (piece.currentVersion !== basedOn) throw new StudioError(STALE_PIECE);
+  const old = await pieceVersion(db, pieceId, basedOn);
+  const options = old.content.hooks ?? [];
+  const chosen = options[index];
+  if (!chosen) throw new StudioError("That hook is no longer there. Reload and try again.");
+  const next = { ...applyHook(piece.platform, old.content, chosen.text), hookChosen: true };
+  const problem = contentProblem(piece.platform, next);
+  if (problem) throw new StudioError(problem);
+  await addVersion(db, pieceId, basedOn, next, "edit", old.scenarioVersion);
+
+  const others = options.filter((_, at) => at !== index).map((option) => `${option.kind}: "${option.text}"`);
+  await recordSignal(db, {
+    agent: agentForPlatform(piece.platform),
+    language: (await requireIdea(db, piece.ideaId)).language as Language,
+    kind: "hook-pick",
+    detail: `{OWNER} picked the ${chosen.kind} hook for a ${PLATFORM_NAMES[piece.platform]} post: "${chosen.text}". They passed over ${others.join(" and ") || "no other"}.`,
+  });
+}
+
+/** Three new hooks for a post, such as one written before posts came with hooks. The post isn't changed. */
+export async function suggestHooks({ db, writer }: StudioDeps, pieceId: string, basedOn: number) {
+  const piece = await requirePiece(db, pieceId);
+  if (piece.currentVersion !== basedOn) throw new StudioError(STALE_PIECE);
+  const old = await pieceVersion(db, pieceId, basedOn);
+  const idea = await requireIdea(db, piece.ideaId);
+  const raw = await writer.writeHooks(await writingContext(db, idea.language as Language), {
+    platform: piece.platform,
+    content: old.content,
+    hookRecord: await hookRecord(db, piece.platform),
+  });
+  const now = currentHook(piece.platform, old.content).toLowerCase();
+  const fresh = cleanHooks(piece.platform, raw).filter((option) => option.text.toLowerCase() !== now);
+  if (fresh.length < 2) throw new StudioError("The writer didn't come back with usable hooks. Try again.");
+  // The opening you have now stays one of the choices when it was one of the old ones, beside up to three new ones.
+  const kept = old.content.hooks?.find((option) => option.kind === hookKindOf(piece.platform, old.content));
+  const hooks = kept ? [kept, ...fresh.filter((option) => option.kind !== kept.kind)].slice(0, HOOK_COUNT + 1) : fresh;
+  await addVersion(db, pieceId, basedOn, { ...old.content, hooks }, "ai-change", old.scenarioVersion);
 }
 
 export async function restorePieceVersion(db: Db, pieceId: string, basedOn: number, version: number) {

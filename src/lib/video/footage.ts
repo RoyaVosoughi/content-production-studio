@@ -10,7 +10,7 @@ import type { Db } from "../db/client";
 import { footage } from "../db/schema";
 import { StudioError } from "../errors";
 import { buildPhrases } from "./edit";
-import { DATA_DIR, FFMPEG, FOOTAGE_DIR, MODEL_DIR, probe, run } from "./tools";
+import { DATA_DIR, FFMPEG, FOOTAGE_DIR, MODEL_DIR, probe, run, stallGuard } from "./tools";
 
 // Clips stay on this computer. Turning speech into text runs here too, with a free Whisper model.
 
@@ -109,19 +109,38 @@ export type Transcriber = (input: {
   onProgress: (stage: "model" | "transcribing", progress: number) => void;
 }) => Promise<{ text: string; start: number; end: number }[]>;
 
+/**
+ * How many half-minute checks in a row may pass without any word from the transcription before the
+ * studio decides it froze. One part of speech takes under a minute even on a busy laptop, so ten
+ * quiet minutes means it stopped working, not that it's slow.
+ */
+const TRANSCRIBE_QUIET_CHECKS = 20;
+
 /** Runs scripts/transcribe.mjs, which uses Whisper on this computer. */
 export const whisperTranscriber: Transcriber = async ({ audioFile, language, windows, onProgress }) => {
   let words: { text: string; start: number; end: number }[] | null = null;
   const script = path.resolve(/*turbopackIgnore: true*/ "scripts/transcribe.mjs");
-  await run(process.execPath, [script, audioFile, language, MODEL_DIR(), JSON.stringify(windows)], {
-    onLine: (line) => {
-      if (!line.startsWith("{")) return;
-      const message = JSON.parse(line) as { type: string; progress?: number; words?: typeof words };
-      if (message.type === "download") onProgress("model", message.progress ?? 0);
-      if (message.type === "progress") onProgress("transcribing", message.progress ?? 0);
-      if (message.type === "done") words = message.words ?? [];
-    },
-  });
+  const guard = stallGuard(TRANSCRIBE_QUIET_CHECKS);
+  try {
+    await run(process.execPath, [script, audioFile, language, MODEL_DIR(), JSON.stringify(windows)], {
+      signal: guard.signal,
+      onLine: (line) => {
+        guard.alive();
+        if (!line.startsWith("{")) return;
+        const message = JSON.parse(line) as { type: string; progress?: number; words?: typeof words };
+        if (message.type === "download") onProgress("model", message.progress ?? 0);
+        if (message.type === "progress") onProgress("transcribing", message.progress ?? 0);
+        if (message.type === "done") words = message.words ?? [];
+      },
+    });
+  } catch (error) {
+    if (guard.stalled()) {
+      throw new StudioError("Reading the speech stopped making progress for 10 minutes, so the studio stopped it. Press Try again.");
+    }
+    throw error;
+  } finally {
+    guard.stop();
+  }
   if (!words) throw new Error("The transcription ended without a result.");
   return words;
 };

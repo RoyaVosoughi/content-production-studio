@@ -15,6 +15,14 @@ const MODEL = "onnx-community/whisper-large-v3-turbo_timestamped";
 const RATE = 16000;
 
 const [audioFile, language, modelDir, windowsJson] = process.argv.slice(2);
+
+// The studio holds this program's input open while it runs. When the studio stops, even by crashing,
+// the input closes, and this stops too instead of using the computer for a result nobody will read.
+if (!process.stdin.isTTY) {
+  process.stdin.on("end", () => process.exit(0));
+  process.stdin.on("error", () => process.exit(0));
+  process.stdin.resume();
+}
 const say = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
 
 env.cacheDir = modelDir;
@@ -50,3 +58,5 @@ for (const [index, [start, end]] of windows.entries()) {
   say({ type: "progress", progress: (index + 1) / windows.length });
 }
 say({ type: "done", words });
+// Lets the program end by itself once the result is written.
+process.stdin.destroy();

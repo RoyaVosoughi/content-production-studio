@@ -160,7 +160,8 @@ export function startResuming(delayMs = 5_000) {
   store.__studioResumed = true;
   setTimeout(async () => {
     try {
-      const { defaultDeps } = await import("./studio");
+      const [{ defaultDeps }, { recoverCutOffScout }] = await Promise.all([import("./studio"), import("./scout-job")]);
+      if (await recoverCutOffScout()) console.log("A restart cut off the Idea Scout's search; its card says so.");
       const count = await resumeInterruptedWork(await defaultDeps());
       if (count > 0) console.log(`The studio picked up ${count} job${count === 1 ? "" : "s"} that a restart had cut off.`);
     } catch (error) {

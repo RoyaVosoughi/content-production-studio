@@ -173,6 +173,32 @@ export const ArticlePieceSchema = z.object({
   body: z.string().describe("The article in Markdown, without repeating the title"),
 });
 
+/**
+ * Three openings to choose from. The kind is a plain string, not an enum, so a free model that
+ * answers "Question" or "statistic" isn't rejected; the studio maps it to a known kind.
+ */
+const HookOptionsField = z
+  .array(
+    z.object({
+      kind: z.string().describe("One of: question, number, story, bold, problem"),
+      text: z.string().describe("The hook exactly as it would appear in its place"),
+    }),
+  )
+  .describe("Always include: three hooks of three different kinds. The first is the one the post uses, word for word");
+
+/** Optional on a post, so a model that leaves the hooks out still delivers the post; you can ask for hooks later. */
+const PostHooksField = HookOptionsField.optional();
+
+export const HookOptionsSchema = z.object({ hooks: HookOptionsField });
+
+/** A post as first written: the post itself, and its three hooks. */
+export const PIECE_WITH_HOOKS = {
+  social: SocialPieceSchema.extend({ hooks: PostHooksField }),
+  instagram: InstagramPieceSchema.extend({ hooks: PostHooksField }),
+  video: VideoPieceSchema.extend({ hooks: PostHooksField }),
+  article: ArticlePieceSchema.extend({ hooks: PostHooksField }),
+};
+
 const NOTE = {
   noteEn: z.string().describe("One short sentence for the author on this draft's quality, in English"),
   noteFa: z.string().describe("The same sentence in natural Persian"),
@@ -206,6 +232,9 @@ export const LessonUpdateSchema = z.object({
   summaryFa: z.string().describe("The same in natural Persian"),
 });
 export type LessonUpdate = z.infer<typeof LessonUpdateSchema>;
+
+/** A post as the writer returns it: its hooks as written, before the studio checks them. */
+export type WrittenPiece = Omit<PieceContent, "hooks"> & { hooks?: { kind: string; text: string }[] };
 
 /** The manager's reasons for sending a draft back, given to the writer for its second try. */
 export type Feedback = { previous: unknown; problems: string[]; instructions: string };
@@ -277,9 +306,16 @@ export interface WritingModel {
       sources: { title: string; url: string }[];
       /** The scenario writer's angle and brief for this channel, when it gave one. */
       channel?: { angle: string; brief: string };
+      /** Which kinds of hook {OWNER} keeps, and how they did once live on this network. */
+      hookRecord?: string[];
       feedback?: Feedback;
     },
-  ): Promise<PieceContent>;
+  ): Promise<WrittenPiece>;
+  /** Three new hooks of different kinds for a post, without changing the post. */
+  writeHooks(
+    context: WritingContext,
+    input: { platform: Platform; content: PieceContent; hookRecord?: string[] },
+  ): Promise<{ kind: string; text: string }[]>;
   revisePiece(
     context: WritingContext,
     input: { platform: Platform; content: PieceContent; request: string },

@@ -102,3 +102,32 @@ export async function checkVideoTools(): Promise<{ ffmpeg: boolean; model: boole
   );
   return { ffmpeg, model, freeGb };
 }
+
+/**
+ * Notices a program that froze: running, but no longer making progress. Call `alive()` whenever it
+ * shows progress; once `checks` checks in a row pass without any, `signal` aborts, which stops it.
+ *
+ * It counts checks rather than minutes on the clock, so a laptop that slept for an hour doesn't look
+ * like a frozen program when it wakes: timers don't run during sleep, so no checks are missed.
+ */
+export function stallGuard(checks: number, everyMs = 30_000) {
+  const controller = new AbortController();
+  let quiet = 0;
+  let moved = false;
+  const timer = setInterval(() => {
+    quiet = moved ? 0 : quiet + 1;
+    moved = false;
+    if (quiet >= checks) {
+      clearInterval(timer);
+      controller.abort();
+    }
+  }, everyMs);
+  return {
+    signal: controller.signal,
+    alive: () => {
+      moved = true;
+    },
+    stalled: () => controller.signal.aborted,
+    stop: () => clearInterval(timer),
+  };
+}

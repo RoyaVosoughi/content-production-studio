@@ -1,6 +1,7 @@
 import { bigint, boolean, integer, jsonb, pgTable, primaryKey, real, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
 import type { AnimationScene, AnimationStyle } from "../video/animation";
 import type { PostImage } from "../post-image";
+import type { HookOption } from "../hooks";
 
 export const brandKits = pgTable("brand_kits", {
   language: text("language").primaryKey(),
@@ -166,6 +167,10 @@ export type PieceContent = {
   window?: { from: number; to: number };
   /** A short video of a long clip's main moments: the parts it keeps, joined in the clip's order. */
   parts?: { from: number; to: number }[];
+  /** Three openings of different kinds to choose from. The post opens with one of them, or with your own. */
+  hooks?: HookOption[];
+  /** True once you picked one of the hooks yourself, rather than keeping the writer's first. */
+  hookChosen?: boolean;
 };
 
 /** A part of a clip, from one phrase to another, that stands on its own as a short video. */

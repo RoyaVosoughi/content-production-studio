@@ -3,6 +3,7 @@ import { agentForPlatform } from "./agents/roster";
 import { recordSignal } from "./agents/team";
 import type { Db } from "./db/client";
 import { ideas, pieces, pieceVersions, postResults, publications, type ResultNumbers } from "./db/schema";
+import { hookKindOf, hookRecordLines, hookTally, type HookKind, type HookTally } from "./hooks";
 import { StudioError } from "./errors";
 import { isContentLanguage, languageInfo, type Language } from "./language";
 import { isPlatform, PLATFORM_NAMES, RESULT_METRICS, type Metric, type Platform } from "./platforms";
@@ -82,6 +83,8 @@ export type PostedRow = {
   pillar: string;
   /** The post's own title, or the start of its text. */
   opening: string;
+  /** The kind of hook it went out with, or null when it opened with your own words. */
+  hookKind: HookKind | null;
   url: string | null;
   externalId: string | null;
   postedAt: Date | null;
@@ -118,6 +121,7 @@ export async function postedPieces(db: Db): Promise<PostedRow[]> {
           ideaTitle: idea.title,
           pillar: idea.pillar,
           opening: openingOf(version.content),
+          hookKind: hookKindOf(piece.platform, version.content),
           url: publication.url,
           externalId: publication.externalId,
           postedAt: publication.postedAt,
@@ -198,7 +202,7 @@ export async function recordNumbers(db: Db, row: PostedRow, numbers: ResultNumbe
   const network = PLATFORM_NAMES[row.platform];
   const shown = RESULT_METRICS[row.platform].map((metric) => `${numbers[metric] ?? 0} ${metric}`).join(", ");
   const how = mine.standing === "strong" ? "did much better than" : "did much worse than";
-  const detail = `Results: this ${network} post ${how} your typical ${network} post (score ${mine.score!.toFixed(1)}, where 1 is typical; ${shown}). Idea: "${row.ideaTitle}" (pillar: ${row.pillar}). It began: "${row.opening}".${values.note ? ` your note: ${values.note}` : ""}`;
+  const detail = `Results: this ${network} post ${how} your typical ${network} post (score ${mine.score!.toFixed(1)}, where 1 is typical; ${shown}). Idea: "${row.ideaTitle}" (pillar: ${row.pillar}). It began: "${row.opening}".${row.hookKind ? ` It opened with a ${row.hookKind} hook.` : ""}${values.note ? ` your note: ${values.note}` : ""}`;
   await recordSignal(db, { agent: agentForPlatform(row.platform), language: row.language, kind: "results", detail });
   await recordSignal(db, { agent: "scout", language: row.language, kind: "results", detail });
   return mine.standing;
@@ -281,4 +285,29 @@ export async function syncInstagramResults(
 export async function performancePatterns(db: Db): Promise<string[]> {
   const { patternLines } = await import("./insights");
   return patternLines(await resultsOverview(db));
+}
+
+/**
+ * Which kinds of hook you pick, and how posts did by the kind they opened with: across every network,
+ * for the Results page, or for one network, for its writer.
+ */
+export async function hookOverview(db: Db, platform?: Platform): Promise<HookTally[]> {
+  const rows = await db
+    .select({ platform: pieces.platform, content: pieceVersions.content })
+    .from(pieces)
+    .innerJoin(pieceVersions, and(eq(pieceVersions.pieceId, pieces.id), eq(pieceVersions.version, pieces.currentVersion)));
+  const picked = rows.flatMap((row) =>
+    isPlatform(row.platform) && row.content.hookChosen && (!platform || row.platform === platform)
+      ? [{ kind: hookKindOf(row.platform, row.content) }]
+      : [],
+  );
+  const live = (await resultsOverview(db))
+    .filter((row) => !platform || row.platform === platform)
+    .map((row) => ({ platform: row.platform, kind: row.hookKind, score: row.score }));
+  return hookTally(picked, live);
+}
+
+/** What one network's writer is told about hooks before writing. */
+export async function hookRecord(db: Db, platform: Platform): Promise<string[]> {
+  return hookRecordLines(platform, await hookOverview(db, platform));
 }

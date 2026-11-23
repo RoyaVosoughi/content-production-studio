@@ -64,6 +64,7 @@ beforeEach(async () => {
     adaptScenario: vi.fn(async (_context, { scenario: source }) => ({ ...source, title: `Other: ${source.title}` })),
     reviseScenario: vi.fn(async () => scenario("AI changed")),
     writePiece: vi.fn(),
+    writeHooks: vi.fn(),
     revisePiece: vi.fn(),
     planEdit: vi.fn(),
     planAnimation: vi.fn(),

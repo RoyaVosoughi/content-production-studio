@@ -46,6 +46,7 @@ function makeWriter(): { [K in keyof WritingModel]: ReturnType<typeof vi.fn> } {
     adaptScenario: vi.fn(async (_c: unknown, { scenario: source }: { scenario: object }) => source),
     reviseScenario: vi.fn(async () => scenario("Changed")),
     writePiece: vi.fn(async () => ({ body: "A Telegram note" })),
+    writeHooks: vi.fn(),
     revisePiece: vi.fn(),
     planEdit: vi.fn(),
     planAnimation: vi.fn(),

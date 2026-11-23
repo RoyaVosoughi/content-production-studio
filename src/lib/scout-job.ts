@@ -1,5 +1,8 @@
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { StudioError } from "./errors";
 import type { Language } from "./language";
+import { DATA_DIR } from "./video/tools";
 
 /**
  * The idea scout's search runs in the background, so the page never waits on it: you can open the
@@ -107,5 +110,51 @@ export function stopScoutJob(): boolean {
   job.stopRequested = true;
   job.status = "stopped";
   job.endedAt = Date.now();
+  return true;
+}
+
+// ---- A search cut off by a restart ----
+
+// The search lives in memory, so a restart loses it without a trace. A small note on disk says one
+// was running; when the studio starts and finds it, the search card says what happened. The search
+// isn't run again by itself, since that would spend search and AI credits without asking.
+
+const CUT_OFF = "The studio stopped while the Idea Scout was searching, so nothing was saved. Search again when you're ready.";
+
+const noteFile = (dir: string) => path.join(/*turbopackIgnore: true*/ dir, "scout-running.json");
+
+/** Writes the note before a search starts. */
+export async function noteScoutRunning(language: Language, dir = DATA_DIR()) {
+  await mkdir(/*turbopackIgnore: true*/ dir, { recursive: true });
+  await writeFile(/*turbopackIgnore: true*/ noteFile(dir), JSON.stringify({ language, startedAt: Date.now() }));
+}
+
+/** Removes the note once the search has finished, however it finished. */
+export async function clearScoutNote(dir = DATA_DIR()) {
+  await rm(/*turbopackIgnore: true*/ noteFile(dir), { force: true });
+}
+
+/** When the studio starts: shows a search that a restart cut off as failed, with a message. */
+export async function recoverCutOffScout(dir = DATA_DIR()): Promise<boolean> {
+  const raw = await readFile(/*turbopackIgnore: true*/ noteFile(dir), "utf8").catch(() => null);
+  if (raw === null || store.__studioScoutJob) return false;
+  await clearScoutNote(dir);
+  let note: { language?: unknown; startedAt?: unknown } = {};
+  try {
+    note = JSON.parse(raw);
+  } catch {
+    // A half-written note still means a search was running.
+  }
+  store.__studioScoutJob = {
+    id: crypto.randomUUID(),
+    language: (typeof note.language === "string" ? note.language : "en") as Language,
+    status: "failed",
+    count: 0,
+    error: CUT_OFF,
+    startedAt: typeof note.startedAt === "number" ? note.startedAt : Date.now(),
+    endedAt: Date.now(),
+    stopRequested: false,
+    settled: true,
+  };
   return true;
 }
